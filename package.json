@@ -4,7 +4,16 @@
   "description": "",
   "main": "main.js",
   "scripts": {
-    "start": "node run.js"
+    "start": "node run.js",
+    "validate": "node scripts/validate.cjs",
+    "validate:glass": "node scripts/validate.cjs --glass",
+    "test": "node --test tests/*.test.cjs",
+    "test:ui": "node tests/run-electron.cjs renderer-smoke.cjs",
+    "test:glass": "node tests/run-electron.cjs glass-smoke.cjs",
+    "test:glass:app": "node tests/run-electron.cjs glass-app-smoke.cjs",
+    "test:responsive": "node tests/run-electron.cjs glass-responsive.cjs",
+    "test:input": "node tests/run-electron.cjs toolbar-input.cjs",
+    "test:app:live": "node tests/run-electron.cjs app-smoke.cjs"
   },
   "keywords": [],
   "author": "",
