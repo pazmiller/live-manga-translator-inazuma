@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="glass.css">
+<link rel="stylesheet" href="overlay.css">
+</head>
+<body>
+<svg id="leaders" aria-hidden="true"></svg>
+<div id="progress" data-liquid-glass="pill" role="status" hidden><i aria-hidden="true"></i><span></span></div>
+<div id="editor-shell" hidden>
+  <section id="bubble-editor" data-liquid-glass="panel" role="dialog" aria-modal="true" aria-labelledby="editor-title" aria-describedby="editor-hint" tabindex="-1">
+    <header class="editor-heading">
+      <div><p class="eyebrow">单条校正</p><h1 id="editor-title">编辑与重新翻译</h1></div>
+      <button id="editor-close" class="icon-button" type="button" aria-label="关闭编辑">×</button>
+    </header>
+    <p id="editor-hint">修改这一条的识别文字，再使用原翻译服务保存。</p>
+    <div class="editor-grid">
+      <figure class="editor-snapshot">
+        <figcaption>已保存的截图 <span>识别此条时的画面</span></figcaption>
+        <div class="snapshot-surface"><img id="editor-image" alt="此条原文的已保存截图" hidden><span id="editor-image-placeholder">正在读取截图…</span></div>
+        <p id="editor-provider"></p>
+      </figure>
+      <div class="editor-fields">
+        <label for="editor-source">识别原文</label>
+        <textarea id="editor-source" rows="6" spellcheck="false" placeholder="可在这里修正错字"></textarea>
+        <label id="editor-translation-label">当前译文</label>
+        <div id="editor-translation" role="textbox" aria-readonly="true" aria-labelledby="editor-translation-label" tabindex="0"></div>
+      </div>
+    </div>
+    <p id="editor-error" role="alert" hidden></p>
+    <p id="editor-status" role="status"></p>
+    <footer class="editor-actions">
+      <button id="editor-reocr" type="button">重新识别截图</button>
+      <div><button id="editor-cancel" type="button">取消</button><button id="editor-save" class="primary" type="button">翻译并保存</button></div>
+    </footer>
+  </section>
+</div>
+<script src="liquid-glass.js"></script>
+<script src="overlay.js"></script>
+</body>
+</html>

@@ -1,0 +1,76 @@
+﻿html, body { margin: 0; background: transparent; overflow: hidden; font: 13px "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif; color: var(--glass-text); user-select: none; }
+* { box-sizing: border-box; }
+button, select { font: inherit; color: inherit; -webkit-app-region: no-drag; }
+button, select { border: 1px solid var(--glass-hairline); border-radius: 11px; background: var(--glass-control); cursor: pointer; white-space: nowrap; height: 30px; padding: 0 11px; transition: background .18s, box-shadow .18s, transform .22s cubic-bezier(.2,.85,.3,1.35); text-shadow: var(--glass-text-shadow); box-shadow: inset 0 1px 0 #ffffff40; }
+button:hover, select:hover { background: var(--glass-control-hover); box-shadow: inset 0 1px 0 #ffffff90, 0 2px 8px #152a4220; }
+button:active { background: var(--glass-control-active); transform: scale(.96); }
+button:focus-visible, select:focus-visible { outline: 2px solid var(--glass-accent); outline-offset: 2px; }
+button:disabled, select:disabled { opacity: .45; cursor: default; box-shadow: none; }
+select { padding: 0 6px 0 10px; }
+select option { background: #f6f9fd; color: #203044; }
+#toolbar { position: relative; margin: 8px; padding: 10px 12px; border: 1px solid var(--glass-border); border-radius: 25px; background: var(--glass-panel-bg); color: var(--glass-text); backdrop-filter: var(--glass-blur); box-shadow: var(--glass-shadow); display: flex; flex-direction: column; gap: 6px; }
+#toolbar::after { content:""; position:absolute; inset:1px; border-radius:23px; pointer-events:none; border:1px solid transparent; background:linear-gradient(115deg, #ffffffb0, #ffffff08 30%, #ffffff00 62%, #d4eaff80) border-box; mask:linear-gradient(#fff 0 0) padding-box, linear-gradient(#fff 0 0); mask-composite:exclude; opacity:calc(.42 + var(--liquid-energy, 0) * .4); }
+/* Keep native dragging out of the composited control panel. A broad drag region
+   can swallow button exclusions on Windows even though DOM click() still works. */
+.heading { display: flex; align-items: center; gap: 6px; height: 20px; -webkit-app-region: drag; }
+.app-mark { display: inline-flex; align-items: center; justify-content: center; height: 20px; width: 20px; border-radius: 6px; color: #fff; background: linear-gradient(150deg, #58afff, #0071f4); box-shadow: inset 0 1px 1px #ffffff70; }
+.app-mark svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.35; stroke-linejoin: round; }
+h1 { font-size: 12px; margin: 0; font-weight: 650; letter-spacing: .03em; }
+.heading-hint { color: var(--glass-muted); font-size: 10px; margin-left: 4px; }
+.drag-handle { margin: 0 auto; font-size: 18px; line-height: 1; color: var(--glass-muted); opacity:.7; }
+.heading .text-button { font-size: 10px; height: 22px; padding: 0 7px; color: var(--glass-muted); }
+.icon-button { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; font-size: 19px; border: none; background: transparent; border-radius: 50%; line-height: 1; }
+#quit:hover { background: #ffdadc; color: #b03142; }
+#quit.armed { width: 44px; font-size: 10px; background: #d84458; color: #fff; border-radius: 8px; }
+.row { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.translation-row { height: 36px; }
+.translation-row > button, .translation-row > select { height: 34px; }
+.control-group { display: inline-flex; align-items: center; background: var(--glass-control); border: 1px solid var(--glass-hairline); border-radius: 12px; box-shadow:inset 0 1px 0 #ffffff30; }
+.control-group select, .control-group button { border: 0; background: transparent; }
+.language-group { height: 34px; padding: 0 3px; }
+.language-group select { height: 30px; }
+#source { width: 69px; }
+#target { width: 92px; }
+.direction { font-size: 15px; color: var(--glass-muted); margin: 0 1px; }
+#provider { width: 105px; }
+.spacer { flex: 1; min-width: 0; }
+.primary { display: inline-flex; align-items: center; justify-content: center; gap: 7px; background: linear-gradient(150deg, #49acffc7, #0873efd9); color: #fff; border-color: #b8e5ff78; box-shadow: 0 3px 8px #006ef033, inset 0 1px 0 #ffffffa0, inset 0 -1px 0 #0044be45; text-shadow:none; font-weight: 600; min-width: 112px; border-radius: 18px; }
+.primary svg { width: 15px; height: 15px; fill: currentColor; }
+.primary:hover { background: linear-gradient(150deg, #75c3ffdc, #0e85f7e8); box-shadow: 0 4px 11px #006ef045, inset 0 1px 0 #ffffffb0; }
+.primary.busy { background: var(--glass-control); color: var(--glass-text); border-color: var(--glass-border); box-shadow: inset 0 1px 0 #ffffff70; text-shadow:var(--glass-text-shadow); }
+.primary.busy svg { animation: breathe 1.5s ease-in-out infinite; }
+.display-row { height: 30px; gap: 6px; }
+#mode { width: 108px; }
+.font-group { height: 29px; border-radius: 10px; }
+.font-group button { height: 27px; min-width: 31px; padding: 0 5px; }
+.divider { width: 1px; height: 13px; background: var(--glass-hairline); }
+.display-row > button { padding: 0 9px; }
+button[aria-pressed="true"] { color: var(--glass-accent); background: var(--accent-soft); border-color: rgba(8, 124, 255, .22); }
+#glassTone { width: 68px; }
+.reading-row { height: 28px; gap: 10px; }
+.segmented { display: inline-flex; align-items: center; padding: 2px; height: 28px; border-radius: 15px; background: rgba(80, 111, 147, .12); border: 1px solid var(--glass-hairline); }
+.segmented button { height: 22px; padding: 0 11px; border: 0; border-radius: 12px; background: transparent; font-size: 11px; color: var(--glass-muted); }
+.segmented button[aria-pressed="true"] { background: var(--glass-control-hover); color: var(--glass-text); box-shadow: 0 1px 4px #27415e29, inset 0 1px 0 #ffffffa0; font-weight: 600; }
+#readingStatus { font-size: 11px; color: var(--glass-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1; }
+.reading-row[data-state="changed"] #readingStatus, .reading-row[data-state="stable"] #readingStatus { color: #985715; }
+[data-liquid-theme="dark"] .reading-row[data-state="changed"] #readingStatus, [data-liquid-theme="dark"] .reading-row[data-state="stable"] #readingStatus { color:#ffd194; }
+.text-button { border-color: transparent; background: transparent; color: var(--glass-accent); padding: 0 7px; height: 27px; box-shadow:none; }
+#translateCurrent { font-size: 11px; background: var(--accent-soft); }
+.recovery-row { min-height: 30px; border-radius: 10px; padding: 0 7px; background: var(--glass-control); border: 1px solid var(--glass-hairline); gap: 5px; }
+.recovery-icon { color: var(--glass-accent); font-size: 17px; }
+#recoveryCount { font-size: 11px; color: var(--glass-muted); }
+.recovery-row button { font-size: 11px; height: 26px; }
+.status-row { display: flex; gap: 6px; align-items: center; height: 16px; min-width: 0; padding: 0 3px; }
+#statusDot { width: 5px; height: 5px; flex: 0 0 auto; border-radius: 50%; background: #6d91b4; }
+body.busy #statusDot { background: var(--glass-accent); animation: breathe 1.2s ease-in-out infinite; }
+#status { color: var(--glass-muted); font-size: 12px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.shortcut { margin-left: auto; flex-shrink: 0; font-size: 11px; letter-spacing: .03em; color: var(--glass-muted); opacity:1; }
+#message { padding: 9px 12px; max-height: 96px; background: var(--glass-field); border: 1px solid #e2b1b6; border-radius: 17px; box-shadow: 0 3px 10px #1c314315; -webkit-app-region: no-drag; display: flex; flex-direction: column; }
+.message-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: #9b3946; flex-shrink: 0; }
+[data-liquid-theme="dark"] .message-heading { color:#ffb8bf; }
+.message-heading strong { font-weight: 600; }
+#message p { margin: 4px 0; line-height: 1.6; overflow-y: auto; overflow-wrap: anywhere; user-select: text; }
+@keyframes breathe { 50% { opacity: .4; } }
+@media (max-width: 610px) { .heading-hint { display: none; } .row { gap: 4px; } #provider { width: 94px; } .translation-row .spacer { display: none; } .primary { min-width: 105px; } .display-row > button { padding: 0 6px; } }
+
+

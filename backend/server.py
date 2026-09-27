@@ -1,0 +1,289 @@
+import asyncio
+import base64
+import binascii
+import copy
+import hashlib
+import io
+import json
+import os
+import queue
+import sys
+import threading
+import time
+from collections import OrderedDict
+from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Annotated, Literal
+
+import numpy as np
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
+from PIL import Image, UnidentifiedImageError
+from pydantic import BaseModel, Field, field_validator
+
+_env = Path(__file__).resolve().parent.parent / ".env"
+if _env.exists():
+    for line in _env.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip().strip("\"'"))
+
+import ocr
+import translate
+
+_warm = {"state": "loading"}
+_slots = threading.BoundedSemaphore(2)
+_ocr_cache = OrderedDict()
+_ocr_cache_lock = threading.Lock()
+
+
+def prewarm():
+    try:
+        ocr.warmup()
+        _warm["state"] = "ready"
+    except Exception:
+        _warm["state"] = "error"
+
+
+@asynccontextmanager
+async def lifespan(app):
+    threading.Thread(target=prewarm, daemon=True).start()
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
+
+
+class ImageReq(BaseModel):
+    image: str = Field(max_length=24_000_000)
+    source: Literal["ja", "en", "zh", "ko"] = "ja"
+
+
+class TranslateReq(ImageReq):
+    target: Literal["zh-CN", "zh-TW", "en", "ja"] = "zh-CN"
+    provider: Literal["google", "deepseek", "claude"] = "deepseek"
+    only_ids: list[Annotated[int, Field(strict=True, ge=0)]] | None = Field(default=None, max_length=100)
+
+    @field_validator("only_ids")
+    @classmethod
+    def unique_ids(cls, ids):
+        if ids is not None and len(set(ids)) != len(ids):
+            raise ValueError("气泡编号不能重复")
+        return ids
+
+
+class BubbleTranslateReq(BaseModel):
+    text: str = Field(min_length=1, max_length=4000)
+    source: Literal["ja", "en", "zh", "ko"] = "ja"
+    target: Literal["zh-CN", "zh-TW", "en", "ja"] = "zh-CN"
+    provider: Literal["google", "deepseek", "claude"] = "deepseek"
+
+    @field_validator("text")
+    @classmethod
+    def nonempty_text(cls, text):
+        if not text.strip():
+            raise ValueError("请输入气泡原文")
+        return text.strip()
+
+
+@app.get("/health")
+def health():
+    return {"ok": True, "service": "manga-window-translator", "protocol": 3,
+            "ocr": _warm["state"],
+            "providers": {"google": True, "deepseek": bool(os.getenv("DEEPSEEK_API_KEY")),
+                          "claude": bool(os.getenv("ANTHROPIC_API_KEY"))}}
+
+
+def require_provider(provider):
+    if provider == "deepseek" and not os.getenv("DEEPSEEK_API_KEY"):
+        raise HTTPException(400, "请在 .env 配置 DEEPSEEK_API_KEY 后重启")
+    if provider == "claude" and not os.getenv("ANTHROPIC_API_KEY"):
+        raise HTTPException(400, "请在 .env 配置 ANTHROPIC_API_KEY 后重启")
+
+
+def decode_image(req):
+    try:
+        raw = base64.b64decode(req.image, validate=True)
+        with Image.open(io.BytesIO(raw)) as original:
+            if original.width * original.height > 12_000_000:
+                raise HTTPException(400, "选区过大，请缩小到 1200 万像素以内")
+            pil = original.convert("RGB")
+    except (ValueError, binascii.Error, UnidentifiedImageError, OSError, Image.DecompressionBombError):
+        raise HTTPException(400, "截图无效，请重新框选") from None
+    return pil, hashlib.sha256(raw).hexdigest()
+
+
+def pipeline(req, pil, digest, cancelled):
+    started = time.perf_counter()
+    yield {"type": "progress", "stage": "ocr", "text": "正在识别文字…"}
+    key = (digest, req.source)
+    with _ocr_cache_lock:
+        bubbles = copy.deepcopy(_ocr_cache.get(key))
+        if bubbles is not None:
+            _ocr_cache.move_to_end(key)
+    ocr_cached = bubbles is not None
+    if req.only_ids is not None and bubbles is None:
+        raise translate.TranslationError("原选区的识别缓存已失效，请重新翻译整个选区后再补翻气泡")
+    if bubbles is None:
+        img = np.asarray(pil)[:, :, ::-1].copy()
+        lines = ocr.ocr_lines(img, req.source)
+        bubbles = ocr.prepare_layout(img, ocr.group_bubbles(lines, img=img, source=req.source))
+        if len(bubbles) > 100:
+            raise translate.TranslationError("文字区域过多，请缩小选区")
+        for i, b in enumerate(bubbles):
+            b["id"] = i
+        with _ocr_cache_lock:
+            _ocr_cache[key] = copy.deepcopy(bubbles)
+            while len(_ocr_cache) > 12:
+                _ocr_cache.popitem(last=False)
+    if req.only_ids is not None:
+        selected = set(req.only_ids)
+        if not selected.issubset({b["id"] for b in bubbles}):
+            raise translate.TranslationError("气泡编号与原选区不匹配，请重新翻译整个选区")
+        bubbles = [b for b in bubbles if b["id"] in selected]
+    ocr_ms = round((time.perf_counter() - started) * 1000)
+    if cancelled.is_set():
+        return
+    yield {"type": "regions", "bubbles": bubbles, "ocr_ms": ocr_ms, "cached": ocr_cached}
+    translated = cached = 0
+    if bubbles:
+        yield {"type": "progress", "stage": "translation", "text": f"识别到 {len(bubbles)} 处，正在翻译…"}
+        for b in translate.translated_bubbles(bubbles, pil, req.source, req.target, req.provider, cancelled):
+            if cancelled.is_set():
+                return
+            translated += 1
+            cached += int(b["cached"])
+            yield {"type": "bubble", "bubble": b, "completed": translated, "total": len(bubbles)}
+    elapsed = round((time.perf_counter() - started) * 1000)
+    yield {"type": "done", "count": translated, "timings": {"ocr_ms": ocr_ms,
+           "translation_ms": elapsed-ocr_ms, "total_ms": elapsed}, "cached": cached, "ocr_cached": ocr_cached}
+
+
+def error_message(error):
+    if isinstance(error, translate.TranslationError):
+        return str(error)
+    name = type(error).__name__.lower()
+    if "timeout" in name:
+        return "翻译服务响应超时，请重试或更换引擎"
+    if "authentication" in name or "permission" in name:
+        return "翻译服务拒绝访问，请检查 API key"
+    if "ratelimit" in name or "toomany" in name:
+        return "翻译服务限流，请稍后重试或更换引擎"
+    return "识别或翻译失败，请检查网络、模型和引擎配置后重试"
+
+
+@app.post("/bubble/ocr")
+def bubble_ocr(req: ImageReq):
+    if not _slots.acquire(blocking=False):
+        raise HTTPException(429, "识别服务忙，请稍后重试")
+    pil = enlarged = None
+    try:
+        pil, _ = decode_image(req)
+        # Improve small saved crops without creating an unbounded OCR bitmap.
+        scale = max(1, min(3, 1600 / max(pil.size)))
+        enlarged = pil.resize((round(pil.width * scale), round(pil.height * scale)), Image.Resampling.LANCZOS) if scale > 1 else pil
+        img = np.asarray(enlarged)[:, :, ::-1].copy()
+        lines = ocr.ocr_lines(img, req.source)
+        bubbles = ocr.group_bubbles(lines, source=req.source)
+        return {"text": "\n".join(b["text"].strip() for b in bubbles if b["text"].strip())}
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise HTTPException(502, error_message(error)) from None
+    finally:
+        if enlarged is not None and enlarged is not pil:
+            enlarged.close()
+        if pil is not None:
+            pil.close()
+        _slots.release()
+
+
+@app.post("/bubble/translate")
+def bubble_translate(req: BubbleTranslateReq):
+    require_provider(req.provider)
+    if not _slots.acquire(blocking=False):
+        raise HTTPException(429, "翻译服务忙，请稍后重试")
+    try:
+        translated = translate.translate_text(req.text, req.source, req.target, req.provider)
+        return {"text": req.text, "translated": translated}
+    except Exception as error:
+        raise HTTPException(502, error_message(error)) from None
+    finally:
+        _slots.release()
+
+
+@app.post("/translate/stream")
+async def stream_translate(req: TranslateReq):
+    require_provider(req.provider)
+    pil, digest = decode_image(req)
+    if not _slots.acquire(blocking=False):
+        pil.close()
+        raise HTTPException(429, "上一项任务正在结束，请稍后重试")
+    events = queue.Queue(maxsize=8)
+    cancelled = threading.Event()
+
+    def put(event):
+        while not cancelled.is_set():
+            try:
+                events.put(event, timeout=0.1)
+                return True
+            except queue.Full:
+                pass
+        return False
+
+    def work():
+        try:
+            for event in pipeline(req, pil, digest, cancelled):
+                if not put(event):
+                    break
+        except Exception as error:
+            put({"type": "error", "message": error_message(error)})
+        finally:
+            pil.close()
+            put(None)
+            _slots.release()
+
+    async def body():
+        threading.Thread(target=work, daemon=True).start()
+        try:
+            while True:
+                try:
+                    event = await asyncio.to_thread(events.get, True, 0.2)
+                except queue.Empty:
+                    continue
+                if event is None:
+                    break
+                yield json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n"
+        finally:
+            cancelled.set()
+
+    return StreamingResponse(body(), media_type="application/x-ndjson", headers={"Cache-Control": "no-store"})
+
+
+@app.post("/translate")
+def do_translate(req: TranslateReq):
+    require_provider(req.provider)
+    pil, digest = decode_image(req)
+    if not _slots.acquire(blocking=False):
+        pil.close()
+        raise HTTPException(429, "翻译服务忙，请稍后重试")
+    try:
+        bubbles, summary = [], {}
+        for event in pipeline(req, pil, digest, threading.Event()):
+            if event["type"] == "bubble":
+                bubbles.append(event["bubble"])
+            elif event["type"] == "done":
+                summary = event
+        return {**summary, "bubbles": sorted(bubbles, key=lambda b: b["id"])}
+    except Exception as error:
+        raise HTTPException(502, error_message(error)) from None
+    finally:
+        pil.close()
+        _slots.release()
+
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8765
+    uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
