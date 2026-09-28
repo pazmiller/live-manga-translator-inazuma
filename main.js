@@ -21,6 +21,7 @@ let jobNumber = 0, generation = 0, reveal = false, interactionLocked = false;
 let backendError = '', readingMode = 'fixed', stale = false, sampling = false;
 let readingState = '', preferences = {}, watchVersion = 0;
 const overlays = new Map(), mouseStates = new Map(), results = new Map(), contexts = new Map();
+const pendingMessages = new WeakMap();
 const watcher = new ReadingWatch(1000);
 const glassCapture = makeGlassCapture({screen,desktopCapturer,send,
   canCapture:()=>supportsWatch && experimentalGlassCapture,isPaused:()=>Boolean(activeJob || bubbleTask)});
@@ -31,9 +32,17 @@ const sameRect = (a,b) => ['x','y','width','height'].every(key=>a[key]===b[key])
 
 function send(win, channel, payload) {
   if (!win || win.isDestroyed()) return;
-  const deliver = () => { if (!win.isDestroyed()) win.webContents.send(channel,payload); };
-  if (win.webContents.isLoading()) win.webContents.once('did-finish-load',deliver);
-  else deliver();
+  if (win.webContents.isLoading()) {
+    let pending=pendingMessages.get(win);
+    if (!pending) {
+      pending=[];pendingMessages.set(win,pending);
+      win.webContents.once('did-finish-load',()=>{
+        pendingMessages.delete(win);
+        if (!win.isDestroyed()) for (const [queuedChannel,queuedPayload] of pending) win.webContents.send(queuedChannel,queuedPayload);
+      });
+    }
+    pending.push([channel,payload]);
+  } else win.webContents.send(channel,payload);
 }
 function broadcast(channel,payload) {for(const win of overlays.values()) send(win,channel,payload);}
 function trackMouse(win) {
@@ -49,7 +58,7 @@ function selectionState() {
     send(selectionWin,'selection:state',{width:rect.width,height:rect.height,readingMode,stale});
   }
 }
-function setStale(value) {stale=value;broadcast('overlay:stale',{stale});selectionState();}
+function setStale(value) {stale=value;broadcast('overlay:stale',{stale});selectionState();recoveryState();}
 function readingStatus(state,text) {
   if(readingState===state) return;
   readingState=state;send(frameWin,'frame:readingState',{state,text});
@@ -74,6 +83,7 @@ function createWindows() {
     selectionState();
     watchVersion++;
     if(readingMode==='watch' && results.size) {watcher.invalidate();setStale(true);readingStatus('changed','选区已移动，停稳后可重新翻译');}
+    recoveryState();
   };
   selectionWin.on('move',changed);selectionWin.on('resize',changed);
   selectionWin.on('closed',()=>{selectionWin=null;app.quit();});
@@ -152,7 +162,11 @@ function configurationFile() {
 function cancelJob() {activeJob?.controller.abort();bubbleTask?.abort();}
 function recoveryState() {
   const c=lastBatch;
-  send(frameWin,'frame:recovery',{available:Boolean(c && !c.success && c.regions.size>c.completed.size),canRestore:Boolean(c && !c.success && c.previous.length),completed:c?.completed.size||0,total:c?.regions.size||0});
+  const selected=selectionWin && !selectionWin.isDestroyed() ? innerRect(selectionWin.getBounds()) : null;
+  const matches=Boolean(c && selected && sameRect(intersect(selected,c.capture.display.bounds),c.capture.rect));
+  send(frameWin,'frame:recovery',{available:Boolean(c && !c.success && c.regions.size>c.completed.size),canRestore:Boolean(c && !c.success && c.previous.length),
+    canEnhance:Boolean(c && c.success && matches && !stale && c.opts.source==='ja' && [...c.completed.keys()].some(id=>results.has(`${c.id}:${id}`))),
+    completed:c?.completed.size||0,total:c?.regions.size||0});
 }
 function clearAll() {
   generation++;watchVersion++;cancelJob();lastBatch=null;results.clear();contexts.clear();editorWin=null;
@@ -254,10 +268,88 @@ function bubbleEntry(key) {
   if(!entry || !context) throw new Error('这条译文的截图已过期，请重新翻译选区');
   return {entry,context};
 }
-function bubbleCrop(entry,context) {
+function bubbleCrop(entry,context,padding=8) {
   const image=nativeImage.createFromBuffer(context.capture.png),size=image.getSize(),b=entry.raw;
-  const x=Math.max(0,Math.floor(b.x-8)),y=Math.max(0,Math.floor(b.y-8));
-  return image.crop({x,y,width:Math.max(1,Math.min(size.width-x,Math.ceil(b.w+16))),height:Math.max(1,Math.min(size.height-y,Math.ceil(b.h+16)))});
+  const x=Math.max(0,Math.floor(b.x-padding)),y=Math.max(0,Math.floor(b.y-padding));
+  return image.crop({x,y,width:Math.max(1,Math.min(size.width-x,Math.ceil(b.w+2*padding))),height:Math.max(1,Math.min(size.height-y,Math.ceil(b.h+2*padding)))});
+}
+async function enhanceSelection() {
+  if(activeJob || bubbleTask) return {error:'已有翻译任务正在进行，请稍候'};
+  if(editorWin) return {error:'请先完成或关闭单条编辑'};
+  const context=lastBatch;
+  if(!context || !context.success || !contexts.has(context.id)) return {error:'请先翻译当前选区'};
+  if(context.opts.source!=='ja') return {error:'加强 OCR 目前只支持日文选区'};
+  const selected=innerRect(selectionWin.getBounds());
+  if(stale || !sameRect(intersect(selected,context.capture.display.bounds),context.capture.rect))
+    return {error:'选区或画面已变化，请重新翻译选区'};
+  const candidates=[...context.regions.values()].map(raw=>{
+    const key=`${context.id}:${raw.id}`;
+    return {key,entry:results.get(key)};
+  }).filter(item=>item.entry);
+  if(!candidates.length) return {error:'当前选区没有可精读的气泡'};
+  if(candidates.length>100) return {error:'当前选区气泡过多，请缩小选区'};
+  const controller=new AbortController();bubbleTask=controller;
+  const savedGeneration=generation;
+  const progress=text=>{
+    if(generation===savedGeneration && lastBatch===context && !controller.signal.aborted) {
+      send(frameWin,'frame:status',{text});
+      send(context.overlay,'overlay:progress',{job:context.id,enhance:true,text});
+    }
+  };
+  const post=async(path,body,timeout)=>{
+    const response=await fetch(`${BACKEND_URL}${path}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),
+      signal:AbortSignal.any([controller.signal,AbortSignal.timeout(timeout)])});
+    const data=await response.json();
+    controller.signal.throwIfAborted();
+    if(!response.ok) throw new Error(typeof data.detail==='string'?data.detail:'加强 OCR 失败，请重试');
+    return data;
+  };
+  try {
+    const staged=[];
+    for(const [index,{key,entry}] of candidates.entries()) {
+      progress(`正在精读气泡 ${index+1}/${candidates.length}…`);
+      const data=await post('/bubble/manga-ocr',{image:bubbleCrop(entry,context,16).toPNG().toString('base64'),source:'ja'},40000);
+      const text=typeof data.text==='string'?data.text.trim():'';
+      if(!text) throw new Error(`第 ${index+1} 条气泡未识别到文字，原有译文已保留`);
+      staged.push({key,entry,text,translated:entry.bubble.translated});
+    }
+    const changed=staged.filter(item=>item.text!==item.entry.bubble.text);
+    if(changed.length) {
+      progress(`已精读 ${candidates.length} 处，正在翻译 ${changed.length} 条更新的原文…`);
+      const data=await post('/selection/translate-texts',{texts:changed.map(item=>item.text),
+        source:'ja',target:context.opts.target,provider:context.opts.provider},120000);
+      if(!Array.isArray(data.items) || data.items.length!==changed.length)
+        throw new Error('翻译条数与精读原文不一致，请重试');
+      data.items.forEach((value,index)=>{
+        if(value.text!==changed[index].text || typeof value.translated!=='string' || !value.translated.trim())
+          throw new Error('翻译结果与精读原文不对应，请重试');
+        changed[index].translated=value.translated.trim();
+      });
+    }
+    const currentSelection=innerRect(selectionWin.getBounds());
+    if(generation!==savedGeneration || lastBatch!==context || editorWin || stale ||
+      !sameRect(intersect(currentSelection,context.capture.display.bounds),context.capture.rect) ||
+      candidates.some(({key,entry})=>results.get(key)!==entry))
+      throw new Error('气泡已变化，请重新翻译选区后再加强 OCR');
+    controller.signal.throwIfAborted();
+    const updated=[];
+    for(const item of changed) {
+      const {entry,text,translated}=item;
+      entry.raw={...entry.raw,text,translated};
+      entry.bubble={...entry.bubble,text,translated};
+      context.regions.set(entry.raw.id,entry.raw);
+      context.completed.set(entry.raw.id,entry.bubble);
+      updated.push(entry.bubble);
+    }
+    if(updated.length) send(context.overlay,'overlay:replace',updated);
+    return {count:candidates.length,changed:updated.length};
+  } catch(error) {
+    return {error:controller.signal.aborted?'已取消加强 OCR':error.name==='TimeoutError'?'加强 OCR 超时，请重试':error.message,
+      cancelled:controller.signal.aborted};
+  } finally {
+    send(context.overlay,'overlay:progress',null);
+    if(bubbleTask===controller) bubbleTask=null;
+  }
 }
 async function bubbleAction(key,kind,text) {
   if(activeJob || bubbleTask) return {error:'已有翻译任务正在进行，请稍候'};
@@ -308,6 +400,7 @@ function setReadingMode(value) {
 
 ipcMain.handle('frame:lock',(_e,opts)=>runLock(opts));
 ipcMain.handle('frame:retry',()=>runLock(null,true));ipcMain.handle('frame:restore',restorePrevious);
+ipcMain.handle('frame:enhance',enhanceSelection);
 ipcMain.handle('frame:cancel',cancelJob);ipcMain.handle('frame:clear',clearAll);ipcMain.handle('frame:health',()=>waitForBackend());
 function toggleReveal() {reveal=!reveal;broadcast('overlay:reveal',reveal);send(frameWin,'frame:reveal',reveal);return reveal;}
 ipcMain.handle('frame:reveal',toggleReveal);ipcMain.handle('frame:readingMode',(_e,value)=>setReadingMode(value));

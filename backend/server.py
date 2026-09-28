@@ -103,6 +103,20 @@ class BubbleTranslateReq(BaseModel):
         return text.strip()
 
 
+class TextsTranslateReq(BaseModel):
+    texts: list[Annotated[str, Field(min_length=1, max_length=4000)]] = Field(min_length=1, max_length=100)
+    source: Literal["ja", "en", "zh", "ko"] = "ja"
+    target: Literal["zh-CN", "zh-TW", "en", "ja"] = "zh-CN"
+    provider: Literal["google", "deepseek", "claude"] = "deepseek"
+
+    @field_validator("texts")
+    @classmethod
+    def nonempty_texts(cls, texts):
+        if any(not text.strip() for text in texts):
+            raise ValueError("气泡原文不能为空")
+        return [text.strip() for text in texts]
+
+
 @app.get("/health")
 def health():
     manga_state = _manga.status()
@@ -249,6 +263,27 @@ def bubble_translate(req: BubbleTranslateReq):
     try:
         translated = translate.translate_text(req.text, req.source, req.target, req.provider)
         return {"text": req.text, "translated": translated}
+    except Exception as error:
+        raise HTTPException(502, error_message(error)) from None
+    finally:
+        _slots.release()
+
+
+@app.post("/selection/translate-texts")
+def selection_translate_texts(req: TextsTranslateReq):
+    require_provider(req.provider)
+    if not _slots.acquire(blocking=False):
+        raise HTTPException(429, "翻译服务忙，请稍后重试")
+    try:
+        if req.provider == "claude":
+            values = [translate.translate_text(text, req.source, req.target, req.provider) for text in req.texts]
+        else:
+            bubbles = [{"id": index, "text": text} for index, text in enumerate(req.texts)]
+            values = [item["translated"] for item in translate.translated_bubbles(
+                bubbles, None, req.source, req.target, req.provider, threading.Event())]
+        if len(values) != len(req.texts):
+            raise translate.TranslationError("翻译条数与原文不一致，请重试")
+        return {"items": [{"text": text, "translated": value} for text, value in zip(req.texts, values)]}
     except Exception as error:
         raise HTTPException(502, error_message(error)) from None
     finally:

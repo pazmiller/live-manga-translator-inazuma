@@ -152,8 +152,8 @@ function dismissItem(key) {
   dismissed.add(key);window.api.dismissBubble(key);removeItem(key);
 }
 
-function addBubble(b) {
-  if(b.job!==session.job || !batchOpen) return;
+function addBubble(b,replace=false) {
+  if(b.job!==session.job || (!batchOpen && !replace)) return;
   const key=bubbleKey(b);
   if(dismissed.has(key)) return;
   for(const pending of document.querySelectorAll('.pending')) if(pending.dataset.id===String(b.id)) pending.remove();
@@ -402,9 +402,10 @@ window.api.onOverlayRegions(data=>{
     Object.assign(el.style,{left:b.x+'px',top:b.y+'px',width:b.w+'px',height:b.h+'px'});document.body.appendChild(el);
   }
 });
-window.api.onOverlayAdd(bubbles=>bubbles.forEach(addBubble));
+window.api.onOverlayAdd(bubbles=>bubbles.forEach(bubble=>addBubble(bubble)));
+window.api.onOverlayReplace(bubbles=>bubbles.forEach(bubble=>addBubble(bubble,true)));
 window.api.onOverlayProgress(data=>{
-  if(data && (!batchOpen || (data.job!==undefined && data.job!==session.job))) return;
+  if(data && ((!batchOpen && !data.enhance) || (data.job!==undefined && data.job!==session.job))) return;
   const el=document.getElementById('progress');el.hidden=!data;
   if(!data) return;
   el.querySelector('span').textContent=data.text;

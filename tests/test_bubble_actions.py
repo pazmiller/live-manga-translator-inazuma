@@ -95,6 +95,23 @@ class BubbleActionTests(unittest.TestCase):
             call.assert_called_once_with(["corrected dialogue"], "en", "zh-CN")
             engine.assert_not_called()
 
+    def test_selection_text_batch_preserves_each_source_and_uses_one_batch(self):
+        texts = ["ち違くてその…", "い、いやこれは…"]
+        request = dict(texts=texts, source="ja", target="zh-CN", provider="deepseek")
+        with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-placeholder"}), \
+             patch.object(translate, "_deepseek_stream", return_value=iter(["不是那样，那个…", "不，这是…"])) as provider:
+            response = self.client.post("/selection/translate-texts", json=request)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["items"], [
+            {"text": texts[0], "translated": "不是那样，那个…"},
+            {"text": texts[1], "translated": "不，这是…"},
+        ])
+        provider.assert_called_once_with(texts, "ja", "zh-CN")
+        with patch.object(translate, "_deepseek_stream") as provider:
+            for invalid in ([], [""], [" "]):
+                self.assertEqual(self.client.post("/selection/translate-texts", json={**request, "texts": invalid}).status_code, 422)
+            provider.assert_not_called()
+
     def test_claude_receives_corrected_text_without_images(self):
         client = Mock()
         client.beta.messages.create.return_value = SimpleNamespace(

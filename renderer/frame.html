@@ -44,9 +44,10 @@
         <option value="claude">Claude</option>
       </select>
       <span class="spacer"></span>
-      <button id="lock" class="primary" title="翻译选区 · Ctrl+Shift+T"><svg viewBox="0 0 16 16" aria-hidden="true">
-          <path d="m8 1 1.7 4.8L14.5 7.5 9.7 9.2 8 14 6.3 9.2 1.5 7.5l4.8-1.7z" />
-        </svg><span>翻译选区</span></button>
+      <div class="translate-actions"><button id="lock" class="primary" title="翻译选区 · Ctrl+Shift+T"><svg viewBox="0 0 16 16" aria-hidden="true">
+            <path d="m8 1 1.7 4.8L14.5 7.5 9.7 9.2 8 14 6.3 9.2 1.5 7.5l4.8-1.7z" />
+          </svg><span>翻译选区</span></button>
+        <button id="enhanceOcr" title="用 Manga OCR 精读这次选区截图中已找到的全部日文气泡，再更新译文" hidden>加强 OCR</button></div>
       <button id="clear" title="取消任务并清除译文 · Ctrl+Shift+C">清除</button>
     </div>
 

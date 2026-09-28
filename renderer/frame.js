@@ -7,6 +7,7 @@ let cancelText = '已取消';
 let readingMode = 'fixed';
 let readingRequest = 0;
 let recovery = { available: false, canRestore: false, completed: 0, total: 0 };
+let enhanceAvailable = false;
 
 function status(text) {
   $('status').textContent = text;
@@ -77,13 +78,15 @@ $('dismissMessage').onclick = hideError;
 document.addEventListener('keydown', event => { if (event.key === 'Escape') hideError(); });
 
 function updateRecovery() {
+  $('enhanceOcr').hidden = !enhanceAvailable;
+  $('enhanceOcr').disabled = busy;
   $('recovery').hidden = !recovery.available && !recovery.canRestore;
   $('recoveryCount').textContent = `本页完成 ${recovery.completed || 0} / ${recovery.total || 0}`;
   $('retryRemaining').disabled = busy || !recovery.available;
   $('restorePrevious').disabled = busy || !recovery.canRestore;
   reportLayout();
 }
-window.api.onRecovery?.(data => { recovery = data; updateRecovery(); });
+window.api.onRecovery?.(data => { recovery = data; enhanceAvailable = Boolean(data.canEnhance); updateRecovery(); });
 
 function setBusy(value) {
   busy = value;
@@ -123,6 +126,17 @@ async function translate(retry = false) {
 const doLock = () => translate();
 $('lock').onclick = doLock;
 window.api.onHotkeyLock(doLock);
+$('enhanceOcr').onclick = async () => {
+  if (busy || !enhanceAvailable) return;
+  setBusy(true); cancelText = '已取消加强 OCR'; hideError(); status('正在加强 OCR…');
+  try {
+    const result = await window.api.enhanceCurrent();
+    if (result.cancelled) status(cancelText);
+    else if (result.error) { status('加强 OCR 未完成'); showError(result.error); }
+    else status(result.changed ? `加强 OCR 完成 · 更新 ${result.changed} 处` : '加强 OCR 完成 · 原文没有变化');
+  } catch (error) { status('加强 OCR 未完成'); showError(error.message); }
+  finally { setBusy(false); }
+};
 $('translateCurrent').onclick = doLock;
 $('retryRemaining').onclick = () => translate(true);
 $('restorePrevious').onclick = async () => {
@@ -138,7 +152,7 @@ $('clear').onclick = async () => {
   try { await window.api.clear(); } catch (error) { showError(error.message); }
 };
 window.api.onStatus(data => {
-  if (data.cleared) { cancelText = '已清除'; hideError(); }
+  if (data.cleared) { cancelText = '已清除'; enhanceAvailable = false; updateRecovery(); hideError(); }
   status(data.text);
 });
 

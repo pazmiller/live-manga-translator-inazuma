@@ -23,8 +23,11 @@ h1 { font-size: 12px; margin: 0; font-weight: 650; letter-spacing: .03em; }
 #quit:hover { background: #ffdadc; color: #b03142; }
 #quit.armed { width: 44px; font-size: 10px; background: #d84458; color: #fff; border-radius: 8px; }
 .row { display: flex; align-items: center; gap: 7px; min-width: 0; }
-.translation-row { height: 36px; }
-.translation-row > button, .translation-row > select { height: 34px; }
+.translation-row { min-height: 36px; align-items: flex-start; }
+.translation-row > button, .translation-row > select, .translate-actions > button { height: 34px; }
+.translate-actions { display: flex; flex-direction: column; gap: 4px; min-width: 112px; }
+.translate-actions > button { width: 100%; }
+#enhanceOcr { color: var(--glass-accent); background: var(--accent-soft); border-color: rgba(8, 124, 255, .22); font-weight: 600; }
 .control-group { display: inline-flex; align-items: center; background: var(--glass-control); border: 1px solid var(--glass-hairline); border-radius: 12px; box-shadow:inset 0 1px 0 #ffffff30; }
 .control-group select, .control-group button { border: 0; background: transparent; }
 .language-group { height: 34px; padding: 0 3px; }
