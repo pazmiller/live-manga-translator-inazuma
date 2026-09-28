@@ -61,6 +61,31 @@ class BubbleActionTests(unittest.TestCase):
             self.assertTrue(slot.acquire(blocking=False))
             slot.release()
 
+    def test_manga_ocr_uses_saved_image_without_translation_key(self):
+        with patch.object(server, "manga_ocr_python", return_value=Path("python.exe")), \
+             patch.object(server._manga, "status", return_value="ready"), \
+             patch.object(server._manga, "recognize", return_value="Japanese text") as worker, \
+             patch.object(translate, "translate_text") as provider:
+            response = self.client.post("/bubble/manga-ocr", json=dict(image=self.image, source="ja"))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"text": "Japanese text"})
+        self.assertTrue(worker.call_args.args[0].startswith(b"\x89PNG"))
+        provider.assert_not_called()
+
+    def test_manga_ocr_rejects_non_japanese_and_unavailable_model(self):
+        with patch.object(server, "manga_ocr_python", return_value=Path("python.exe")), patch.object(server._manga, "recognize") as worker:
+            response = self.client.post("/bubble/manga-ocr", json=dict(image=self.image, source="en"))
+            self.assertEqual(response.status_code, 400)
+            worker.assert_not_called()
+            with patch.object(server._manga, "status", return_value="loading"):
+                response = self.client.post("/bubble/manga-ocr", json=dict(image=self.image, source="ja"))
+                self.assertEqual(response.status_code, 503)
+                self.assertIn("正在后台载入", response.json()["detail"])
+                worker.assert_not_called()
+        with patch.object(server, "manga_ocr_python", return_value=None):
+            response = self.client.post("/bubble/manga-ocr", json=dict(image=self.image, source="ja"))
+            self.assertEqual(response.status_code, 503)
+
     def test_corrected_text_is_used_for_google_and_deepseek(self):
         for provider, function in (("google", "translate_free"), ("deepseek", "translate_deepseek")):
             with self.subTest(provider=provider), patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-placeholder"}), patch.object(translate, function, return_value=["  translation  "]) as call, patch.object(ocr, "ocr_lines") as engine:

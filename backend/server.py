@@ -31,11 +31,23 @@ if _env.exists():
 
 import ocr
 import translate
+from manga_worker import MangaWorker, MangaWorkerError
 
 _warm = {"state": "loading"}
 _slots = threading.BoundedSemaphore(2)
 _ocr_cache = OrderedDict()
 _ocr_cache_lock = threading.Lock()
+
+
+def manga_ocr_python():
+    if not Path(__file__).with_name("manga_ocr_worker.py").is_file():
+        return None
+    configured = os.getenv("MWT_MANGA_OCR_PYTHON")
+    candidate = Path(configured) if configured else Path(__file__).resolve().parent.parent / ".manga-ocr-venv" / "Scripts" / "python.exe"
+    return candidate if candidate.is_file() else None
+
+
+_manga = MangaWorker(manga_ocr_python, Path(__file__).with_name("manga_ocr_worker.py"))
 
 
 def prewarm():
@@ -49,7 +61,11 @@ def prewarm():
 @asynccontextmanager
 async def lifespan(app):
     threading.Thread(target=prewarm, daemon=True).start()
-    yield
+    threading.Thread(target=_manga.start, daemon=True).start()
+    try:
+        yield
+    finally:
+        _manga.close()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -89,8 +105,10 @@ class BubbleTranslateReq(BaseModel):
 
 @app.get("/health")
 def health():
+    manga_state = _manga.status()
     return {"ok": True, "service": "manga-window-translator", "protocol": 3,
-            "ocr": _warm["state"],
+            "ocr": _warm["state"], "manga_ocr": manga_state == "ready",
+            "manga_ocr_state": manga_state,
             "providers": {"google": True, "deepseek": bool(os.getenv("DEEPSEEK_API_KEY")),
                           "claude": bool(os.getenv("ANTHROPIC_API_KEY"))}}
 
@@ -196,6 +214,30 @@ def bubble_ocr(req: ImageReq):
             enlarged.close()
         if pil is not None:
             pil.close()
+        _slots.release()
+
+
+@app.post("/bubble/manga-ocr")
+def bubble_manga_ocr(req: ImageReq):
+    if req.source != "ja":
+        raise HTTPException(400, "日漫精读仅支持日文原文")
+    if manga_ocr_python() is None:
+        raise HTTPException(503, "尚未安装日漫精读模型")
+    manga_state = _manga.status()
+    if manga_state != "ready":
+        message = "日漫精读模型正在后台载入，请稍候重试" if manga_state == "loading" else "日漫精读模型启动失败，请重启应用"
+        raise HTTPException(503, message)
+    if not _slots.acquire(blocking=False):
+        raise HTTPException(429, "识别服务忙，请稍后重试")
+    try:
+        image, _ = decode_image(req)
+        with image, io.BytesIO() as payload:
+            image.save(payload, format="PNG")
+            try:
+                return {"text": _manga.recognize(payload.getvalue())}
+            except MangaWorkerError as error:
+                raise HTTPException(error.status_code, str(error)) from None
+    finally:
         _slots.release()
 
 

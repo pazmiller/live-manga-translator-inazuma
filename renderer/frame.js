@@ -180,7 +180,9 @@ $('moveSelection').onclick = async () => {
 };
 
 function updateHealth(data) {
-  if (!busy && !hasTranslated) status(data.ocr === 'ready' ? '框选漫画后开始翻译' : '模型预热中，可开始框选');
+  if (!busy && !hasTranslated) status(data.ocr === 'loading' ? '普通 OCR 预热中，可开始框选'
+    : data.manga_ocr_state === 'loading' ? '日漫精读后台载入中，可开始翻译'
+    : '框选漫画后开始翻译');
   for (const option of $('provider').options) {
     option.disabled = !data.providers[option.value];
     option.title = option.disabled ? '此引擎尚未配置' : '';
@@ -189,7 +191,8 @@ function updateHealth(data) {
     const available = [...$('provider').options].find(option => !option.disabled);
     if (available) { $('provider').value = available.value; save(); }
   }
-  if (data.ocr === 'loading') setTimeout(() => window.api.health().then(updateHealth).catch(() => {}), 1000);
+  if (data.ocr === 'loading' || data.manga_ocr_state === 'loading')
+    setTimeout(() => window.api.health().then(updateHealth).catch(() => {}), 1000);
   if (data.ocr === 'error' && !busy && !hasTranslated) status('预热失败，翻译时将重试');
 }
 window.api.health().then(updateHealth).catch(error => { status('服务不可用'); showError(error.message); });

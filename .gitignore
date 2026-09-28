@@ -1,5 +1,6 @@
 node_modules/
 backend/.venv/
+.manga-ocr-venv/
 __pycache__/
 *.pyc
 .env

@@ -264,12 +264,14 @@ async function bubbleAction(key,kind,text) {
   const controller=new AbortController();bubbleTask=controller;
   try {
     const {entry,context}=bubbleEntry(key),savedGeneration=generation;
-    const body=kind==='ocr'?{image:bubbleCrop(entry,context).toPNG().toString('base64'),source:context.opts.source}:{text,source:context.opts.source,target:context.opts.target,provider:context.opts.provider};
-    const response=await fetch(`${BACKEND_URL}/bubble/${kind}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.any([controller.signal,AbortSignal.timeout(60000)])});
+    const recognition=kind==='ocr'||kind==='manga-ocr';
+    const body=recognition?{image:bubbleCrop(entry,context,kind==='manga-ocr'?16:8).toPNG().toString('base64'),source:context.opts.source}:{text,source:context.opts.source,target:context.opts.target,provider:context.opts.provider};
+    const response=await fetch(`${BACKEND_URL}/bubble/${kind}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.any([controller.signal,AbortSignal.timeout(kind==='manga-ocr'?40000:60000)])});
     const data=await response.json();controller.signal.throwIfAborted();
     if(!response.ok) throw new Error(typeof data.detail==='string'?data.detail:'单条处理失败，请检查原文后重试');
     if(generation!==savedGeneration || results.get(key)!==entry) throw new Error('这条译文已变化，请重新打开编辑');
-    if(kind==='ocr') return data;
+    if(recognition) return data;
+    if(data.text!==text) throw new Error('翻译返回的原文与当前气泡不一致，请重试');
     entry.bubble={...entry.bubble,text:data.text,translated:data.translated};entry.raw={...entry.raw,text:data.text,translated:data.translated};
     context.completed.set(entry.raw.id,entry.bubble);return {bubble:entry.bubble};
   } catch(error) {return {error:controller.signal.aborted?'已取消':error.message};}
@@ -338,8 +340,8 @@ ipcMain.handle('bubble:inspect',(_e,key)=>{
   try {const {entry,context}=bubbleEntry(key);return {text:entry.bubble.text,translated:entry.bubble.translated,image:bubbleCrop(entry,context).toDataURL(),...context.opts};}
   catch(error) {return {error:error.message};}
 });
-ipcMain.handle('bubble:ocr',(_e,key)=>bubbleAction(key,'ocr'));ipcMain.handle('bubble:translate',(_e,data)=>bubbleAction(data.key,'translate',data.text));
-ipcMain.on('bubble:dismiss',(_e,key)=>{results.delete(key);});
+ipcMain.handle('bubble:ocr',(_e,key)=>bubbleAction(key,'ocr'));ipcMain.handle('bubble:manga-ocr',(_e,key)=>bubbleAction(key,'manga-ocr'));ipcMain.handle('bubble:translate',(_e,data)=>bubbleAction(data.key,'translate',data.text));
+ipcMain.on('bubble:dismiss',(_e,key)=>{results.delete(key);recoveryState();});
 ipcMain.on('overlay:editor',(event,value)=>{
   const win=BrowserWindow.fromWebContents(event.sender);
   if(value) {editorWin=win;win.setIgnoreMouseEvents(false);win.focus();}

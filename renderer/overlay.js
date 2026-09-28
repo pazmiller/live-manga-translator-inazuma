@@ -14,8 +14,11 @@ const bubbleKey = b => b.key || `${b.job}:${b.id}`;
 const editorShell = document.getElementById('editor-shell');
 const editorPanel = document.getElementById('bubble-editor');
 const editorSource = document.getElementById('editor-source');
+const editorTranslationLabel = document.getElementById('editor-translation-label');
+const editorTranslation = document.getElementById('editor-translation');
 const editorSave = document.getElementById('editor-save');
 const editorReocr = document.getElementById('editor-reocr');
+const editorMangaOcr = document.getElementById('editor-manga-ocr');
 const editorError = document.getElementById('editor-error');
 const editorStatus = document.getElementById('editor-status');
 
@@ -196,6 +199,7 @@ function setEditorBusy(state,busy,message='') {
   editorSource.disabled=busy;
   editorSave.disabled=busy || !state.ready;
   editorReocr.disabled=busy || !state.hasImage;
+  editorMangaOcr.disabled=busy;
   editorPanel.setAttribute('aria-busy',String(busy));
   editorStatus.textContent=message;
   reportHits();
@@ -206,9 +210,18 @@ function showEditorError(error) {
   editorError.hidden=false;
 }
 
+function updateTranslationStale(state) {
+  if(!editorCurrent(state)) return;
+  const changed=editorSource.value.trim()!==state.savedText.trim();
+  editorTranslationLabel.textContent=changed ? '上次译文（原文已改，尚未重新翻译）' : '当前译文';
+  editorTranslation.classList.toggle('stale',changed);
+}
+editorSource.addEventListener('input',()=>{if(editor) updateTranslationStale(editor);});
+
 function closeEditor(restoreFocus=true) {
   if(!editor) return;
   const trigger=editor.trigger;
+  clearTimeout(editor.healthTimer);
   editor=null;editorShell.hidden=true;
   document.getElementById('editor-image').removeAttribute('src');
   window.api.editorOpen(false);
@@ -216,12 +229,31 @@ function closeEditor(restoreFocus=true) {
   reportHits();
 }
 
+async function refreshMangaHealth(state) {
+  try {
+    const health=await window.api.health();
+    if(!editorCurrent(state)) return;
+    const modelState=health.manga_ocr_state || (health.manga_ocr ? 'ready' : 'missing');
+    const hint=state.source!=='ja' ? '日漫精读仅支持日文气泡；请选日语并重新翻译选区。'
+      : !state.hasImage ? '此条截图已不可用；可直接编辑原文。'
+      : modelState==='loading' ? '日漫精读模型正在后台加载；可点击尝试，未就绪时会提示重试。'
+      : modelState==='missing' ? '日漫精读模型未安装；请按 README 安装可选模型并重启。'
+      : modelState==='error' ? '日漫精读模型启动失败；请检查模型安装后重启。' : '';
+    editorMangaOcr.title=hint || '用 Manga OCR 识别已保存的气泡截图';
+    if(!state.busy) setEditorBusy(state,false,hint);
+    if(modelState==='loading') state.healthTimer=setTimeout(()=>refreshMangaHealth(state),1000);
+  } catch(error) {
+    if(editorCurrent(state) && !state.busy) setEditorBusy(state,false,'日漫精读状态暂时不可用；可继续手动编辑原文。');
+  }
+}
+
 async function openEditor(item,trigger) {
   closeEditor(false);endDrag();
-  const state={item,key:bubbleKey(item.b),revision:item.revision,trigger,busy:false,ready:false,hasImage:false};
+  const state={item,key:bubbleKey(item.b),revision:item.revision,trigger,busy:false,ready:false,hasImage:false,source:'',savedText:item.b.text || ''};
   editor=state;editorShell.hidden=false;
   editorSource.value=item.b.text || '';
-  document.getElementById('editor-translation').textContent=item.b.translated || '暂无译文';
+  editorTranslation.textContent=item.b.translated || '暂无译文';
+  updateTranslationStale(state);
   document.getElementById('editor-title').textContent=`编辑第 ${item.b.id+1} 条译文`;
   document.getElementById('editor-provider').textContent='';
   const preview=document.getElementById('editor-image');preview.hidden=true;preview.removeAttribute('src');
@@ -234,14 +266,19 @@ async function openEditor(item,trigger) {
     if(!editorCurrent(state)) return;
     if(result.error) throw new Error(result.error);
     editorSource.value=result.text ?? item.b.text ?? '';
-    document.getElementById('editor-translation').textContent=result.translated || item.b.translated || '暂无译文';
+    state.savedText=editorSource.value;
+    editorTranslation.textContent=result.translated || item.b.translated || '暂无译文';
+    updateTranslationStale(state);
     const provider=typeof result.provider==='string' ? result.provider : result.provider?.name;
     document.getElementById('editor-provider').textContent=[result.source,result.target].filter(Boolean).join(' → ')+(provider ? ` · ${provider}` : '');
-    state.hasImage=Boolean(result.image);state.ready=true;
+    state.hasImage=Boolean(result.image);state.ready=true;state.source=result.source;
     if(result.image) {preview.src=result.image;preview.hidden=false;placeholder.hidden=true;}
     else placeholder.textContent='此条截图已不可用，可直接编辑原文。';
-    setEditorBusy(state,false);
+    setEditorBusy(state,false,state.source==='ja' && state.hasImage ? '可点击「日漫精读」；模型状态正在确认。' :
+      state.source!=='ja' ? '日漫精读仅支持日文气泡；请选日语并重新翻译选区。' :
+      '此条截图已不可用，可直接编辑原文。');
     editorSource.focus({preventScroll:true});
+    refreshMangaHealth(state);
   } catch(error) {
     if(!editorCurrent(state)) return;
     placeholder.textContent='无法读取已保存的截图';
@@ -258,11 +295,39 @@ editorReocr.onclick=async()=>{
     if(!editorCurrent(state)) return;
     if(result.error) throw new Error(result.error);
     editorSource.value=result.text ?? '';
+    updateTranslationStale(state);
     setEditorBusy(state,false,'识别完成。检查原文后，点击「翻译并保存」。');
     editorSource.focus({preventScroll:true});
   } catch(error) {
     if(!editorCurrent(state)) return;
     showEditorError(error);setEditorBusy(state,false);
+  }
+};
+
+editorMangaOcr.onclick=async()=>{
+  const state=editor;
+  if(!state || state.busy) return;
+  if(!state.hasImage) {showEditorError('此条保存的截图已不可用，可手动修改原文。');return;}
+  if(state.source!=='ja') {showEditorError('日漫精读仅支持日文气泡；请选日语并重新翻译选区。');return;}
+  editorError.hidden=true;setEditorBusy(state,true,'正在用 Manga OCR 精读已保存的气泡截图…');
+  const started=Date.now();
+  const timer=setInterval(()=>{
+    if(editorCurrent(state)) editorStatus.textContent=`正在精读…已等待 ${Math.floor((Date.now()-started)/1000)} 秒，可点取消关闭。`;
+  },1000);
+  try {
+    const result=await window.api.mangaOcrBubble(state.key);
+    if(!editorCurrent(state)) return;
+    if(result.error) throw new Error(result.error);
+    if(!result.text?.trim()) throw new Error('未识别到文字，请保持原文或手动修改。');
+    editorSource.value=result.text;
+    updateTranslationStale(state);
+    setEditorBusy(state,false,'精读完成。请核对原文，再点击「翻译并保存」。');
+    editorSource.focus({preventScroll:true});
+  } catch(error) {
+    if(!editorCurrent(state)) return;
+    showEditorError(error);setEditorBusy(state,false);
+  } finally {
+    clearInterval(timer);
   }
 };
 

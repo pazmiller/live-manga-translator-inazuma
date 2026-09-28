@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld("api", {
   setToolbarHeight: value => ipcRenderer.send("frame:height", value),
   inspectBubble: key => ipcRenderer.invoke("bubble:inspect", key),
   reocrBubble: key => ipcRenderer.invoke("bubble:ocr", key),
+  mangaOcrBubble: key => ipcRenderer.invoke("bubble:manga-ocr", key),
   retranslateBubble: data => ipcRenderer.invoke("bubble:translate", data),
   editorOpen: value => ipcRenderer.send("overlay:editor", value),
   dismissBubble: key => ipcRenderer.send("bubble:dismiss", key),
