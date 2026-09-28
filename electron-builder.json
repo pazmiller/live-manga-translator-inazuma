@@ -1,0 +1,13 @@
+{
+  "appId": "com.inazuma.mangatranslator",
+  "productName": "Inazuma",
+  "directories": {"output": "dist"},
+  "files": ["main.js", "preload.js", "pipeline.js", "reading-watch.js", "glass-capture.js", "renderer/**/*", "package.json"],
+  "extraResources": [{"from": ".build/backend/inazuma-backend", "to": "backend"}],
+  "asar": true,
+  "npmRebuild": false,
+  "win": {"target": [{"target": "nsis", "arch": ["x64"]}], "signAndEditExecutable": false},
+  "nsis": {"oneClick": false, "perMachine": false, "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true, "createStartMenuShortcut": true, "runAfterFinish": false,
+    "artifactName": "Inazuma-Setup-${version}-${arch}.exe"}
+}

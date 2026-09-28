@@ -44,6 +44,10 @@ for (const [id, delta] of [['smaller', -.1], ['larger', .1]]) {
   };
 }
 $('reveal').onclick = () => window.api.reveal();
+$('configuration').onclick = async () => {
+  try { await window.api.configuration(); status('填写密钥并保存后，请退出并重新启动应用'); }
+  catch(error) { showError(error.message); }
+};
 window.api.onReveal(value => {
   $('reveal').setAttribute('aria-pressed', String(value));
   $('reveal').textContent = value ? '返回译文' : '查看原图';

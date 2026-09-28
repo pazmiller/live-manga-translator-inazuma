@@ -1,7 +1,7 @@
 {
   "name": "manga-window-translator",
   "version": "1.0.0",
-  "description": "",
+  "description": "Live manga translation for Windows",
   "main": "main.js",
   "scripts": {
     "start": "node run.js",
@@ -13,12 +13,17 @@
     "test:glass:app": "node tests/run-electron.cjs glass-app-smoke.cjs",
     "test:responsive": "node tests/run-electron.cjs glass-responsive.cjs",
     "test:input": "node tests/run-electron.cjs toolbar-input.cjs",
-    "test:app:live": "node tests/run-electron.cjs app-smoke.cjs"
+    "test:app:live": "node tests/run-electron.cjs app-smoke.cjs",
+    "test:manga:startup": "node tests/run-electron.cjs manga-startup-smoke.cjs",
+    "test:manga:ui": "node tests/run-electron.cjs manga-ui-live.cjs",
+    "dist:win": "node scripts/build-windows.cjs",
+    "test:packaged": "node tests/packaged-smoke.cjs"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "devDependencies": {
-    "electron": "^44.4.2"
+    "electron": "^44.4.2",
+    "electron-builder": "26.0.12"
   }
 }

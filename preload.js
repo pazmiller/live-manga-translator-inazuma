@@ -24,6 +24,7 @@ contextBridge.exposeInMainWorld("api", {
   resizeTo: (x, y, w, h, anchor) => ipcRenderer.invoke("frame:resizeTo", x, y, w, h, anchor),
   getBounds: () => ipcRenderer.invoke("frame:getBounds"),
   quit: () => ipcRenderer.invoke("frame:quit"),
+  configuration: () => ipcRenderer.invoke("frame:configuration"),
   hitRegions: (regions) => ipcRenderer.send("win:hitRegions", regions),
   dragging: (active) => ipcRenderer.send("win:dragging", active),
   onStatus: (cb) => ipcRenderer.on("frame:status", (_e, data) => cb(data)),

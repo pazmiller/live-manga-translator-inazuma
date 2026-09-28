@@ -21,9 +21,9 @@ from fastapi.responses import StreamingResponse
 from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, Field, field_validator
 
-_env = Path(__file__).resolve().parent.parent / ".env"
+_env = Path(os.environ["MWT_ENV_FILE"]) if os.environ.get("MWT_ENV_FILE") else Path(__file__).resolve().parent.parent / ".env"
 if _env.exists():
-    for line in _env.read_text(encoding="utf-8").splitlines():
+    for line in _env.read_text(encoding="utf-8-sig").splitlines():
         line = line.strip()
         if line and not line.startswith("#") and "=" in line:
             k, v = line.split("=", 1)

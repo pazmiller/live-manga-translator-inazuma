@@ -4,3 +4,5 @@ __pycache__/
 *.pyc
 .env
 .qa/
+.build/
+dist/

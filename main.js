@@ -1,13 +1,14 @@
-const {app, BrowserWindow, ipcMain, desktopCapturer, screen, globalShortcut, nativeImage} = require('electron');
+const {app, BrowserWindow, ipcMain, desktopCapturer, screen, globalShortcut, nativeImage, shell} = require('electron');
+const fs = require('node:fs');
 const path = require('path');
 const os = require('os');
-const {spawn} = require('child_process');
+const {spawn, spawnSync} = require('child_process');
 const {readEvents, localBubble, intersect} = require('./pipeline');
 const {ReadingWatch} = require('./reading-watch');
 const {makeGlassCapture} = require('./glass-capture');
 
-const BACKEND_PORT = Number(process.env.MWT_BACKEND_PORT || 8765);
-const BACKEND_URL = `http://127.0.0.1:${BACKEND_PORT}`;
+let BACKEND_PORT = Number(process.env.MWT_BACKEND_PORT || 8765);
+let BACKEND_URL = `http://127.0.0.1:${BACKEND_PORT}`;
 const BORDER = 6, MIN_SIZE = 64;
 const windowsBuild = Number(os.release().split('.')[2]);
 const supportsWatch = process.platform === 'win32' && windowsBuild >= 19041;
@@ -56,12 +57,14 @@ function readingStatus(state,text) {
 function createWindows() {
   const work=screen.getPrimaryDisplay().workArea;
   frameWin=new BrowserWindow({x:work.x+24,y:work.y+24,width:680,height:220,
+    show:!app.commandLine.hasSwitch('smoke-test'),
     transparent:true,frame:false,alwaysOnTop:true,hasShadow:false,resizable:false,
     webPreferences:{preload:path.join(__dirname,'preload.js'),contextIsolation:true}});
   trackMouse(frameWin);frameWin.setAlwaysOnTop(true,'screen-saver');
   frameWin.loadFile(path.join(__dirname,'renderer/frame.html'));
   frameWin.on('closed',()=>{frameWin=null;app.quit();});
   selectionWin=new BrowserWindow({x:work.x+70,y:work.y+260,width:620,height:Math.max(MIN_SIZE,Math.min(640,work.height-280)),
+    show:!app.commandLine.hasSwitch('smoke-test'),
     minWidth:MIN_SIZE,minHeight:MIN_SIZE,transparent:true,frame:false,alwaysOnTop:true,
     hasShadow:false,resizable:false,skipTaskbar:true,
     webPreferences:{preload:path.join(__dirname,'preload.js'),contextIsolation:true}});
@@ -128,11 +131,23 @@ async function startBackend() {
       backendError='端口被旧版服务占用，请退出旧版应用后重试';return;
     }
   } catch {}
-  backendProc=spawn(path.join(__dirname,'backend','.venv','Scripts','python.exe'),['server.py',String(BACKEND_PORT)],{
-    cwd:path.join(__dirname,'backend'),stdio:['ignore','pipe','pipe'],windowsHide:true,env:{...process.env,PYTHONIOENCODING:'utf-8'}});
+  const backendDir=app.isPackaged ? path.join(process.resourcesPath,'backend') : path.join(__dirname,'backend');
+  const executable=app.isPackaged ? path.join(backendDir,'inazuma-backend.exe') : path.join(backendDir,'.venv','Scripts','python.exe');
+  const args=app.isPackaged ? [String(BACKEND_PORT)] : ['server.py',String(BACKEND_PORT)];
+  backendProc=spawn(executable,args,{
+    cwd:backendDir,stdio:['ignore','pipe','pipe'],windowsHide:true,env:{...process.env,PYTHONIOENCODING:'utf-8',
+      ...(app.isPackaged ? {MWT_ENV_FILE:configurationFile()} : {})}});
   backendProc.stdout.on('data',d=>process.stdout.write(`[py] ${d}`));backendProc.stderr.on('data',d=>process.stderr.write(`[py] ${d}`));
-  backendProc.on('error',()=>{backendError='Python 启动失败，请按 README 安装后端环境';});
+  backendProc.on('error',()=>{backendError=app.isPackaged ? '内置识别服务启动失败，请重新安装应用' : 'Python 启动失败，请按 README 安装后端环境';});
   backendProc.on('exit',()=>{backendProc=null;backendError='后端已停止，请重启应用';});
+}
+function configurationFile() {
+  const config=path.join(app.getPath('userData'),'settings.env.txt');
+  if(!fs.existsSync(config)) {
+    fs.mkdirSync(path.dirname(config),{recursive:true});
+    fs.writeFileSync(config,'# Fill in your own keys, save, then restart Inazuma.\nDEEPSEEK_API_KEY=\nANTHROPIC_API_KEY=\nDEEPSEEK_MODEL=deepseek-chat\n',{encoding:'utf8',flag:'wx'});
+  }
+  return config;
 }
 function cancelJob() {activeJob?.controller.abort();bubbleTask?.abort();}
 function recoveryState() {
@@ -297,6 +312,13 @@ ipcMain.handle('frame:reveal',toggleReveal);ipcMain.handle('frame:readingMode',(
 ipcMain.on('frame:preferences',(_e,prefs)=>{preferences=prefs;broadcast('overlay:preferences',prefs);send(selectionWin,'overlay:preferences',prefs);});
 ipcMain.on('frame:interact',(_e,value)=>{interactionLocked=Boolean(value);});
 ipcMain.handle('frame:getBounds',()=>selectionWin.getBounds());ipcMain.handle('frame:quit',()=>app.quit());
+ipcMain.handle('frame:configuration',async()=>{
+  const file=app.isPackaged ? configurationFile() : path.join(__dirname,'.env');
+  if(!app.isPackaged && !fs.existsSync(file)) fs.copyFileSync(path.join(__dirname,'.env.example'),file);
+  if(app.isPackaged) {
+    const error=await shell.openPath(file);if(error) throw new Error(error);
+  } else spawn('notepad.exe',[file],{windowsHide:true});
+});
 ipcMain.on('frame:height',(_e,value)=>{
   if(!frameWin || !Number.isFinite(value)) return;
   const b=frameWin.getBounds(),work=screen.getDisplayMatching(b).workArea,height=Math.max(150,Math.min(Math.ceil(value),work.height));
@@ -351,7 +373,16 @@ function updateMouse() {
     state.motion={...local,wx:b.x,wy:b.y};
   }
 }
-app.whenReady().then(()=>{
+app.whenReady().then(async()=>{
+  if(app.isPackaged && !process.env.MWT_BACKEND_PORT) {
+    // Each installed instance owns its backend; never borrow a development
+    // server's credentials or terminate another instance's service on exit.
+    BACKEND_PORT=await new Promise((resolve,reject)=>{
+      const server=require('node:net').createServer();server.once('error',reject);
+      server.listen(0,'127.0.0.1',()=>{const port=server.address().port;server.close(()=>resolve(port));});
+    });
+    BACKEND_URL=`http://127.0.0.1:${BACKEND_PORT}`;
+  }
   startBackend();createWindows();cursorTimer=setInterval(updateMouse,40);watchTimer=setInterval(watchSelection,850);
   if(experimentalGlassCapture) glassTimer=setInterval(()=>glassCapture.tick(),150);
   globalShortcut.register('CommandOrControl+Shift+T',()=>send(frameWin,'frame:hotkeyLock'));
@@ -359,5 +390,11 @@ app.whenReady().then(()=>{
   screen.on('display-removed',(_event,display)=>{clearAll();overlays.get(String(display.id))?.close();});
   screen.on('display-metrics-changed',(_event,display)=>{clearAll();overlays.get(String(display.id))?.setBounds(display.bounds);});
 });
-app.on('before-quit',()=>{cancelJob();clearInterval(cursorTimer);clearInterval(watchTimer);clearInterval(glassTimer);glassCapture.dispose();globalShortcut.unregisterAll();backendProc?.kill();});
+app.on('before-quit',()=>{
+  cancelJob();clearInterval(cursorTimer);clearInterval(watchTimer);clearInterval(glassTimer);
+  glassCapture.dispose();globalShortcut.unregisterAll();
+  if(backendProc?.pid && process.platform==='win32')
+    spawnSync('taskkill.exe',['/PID',String(backendProc.pid),'/T','/F'],{windowsHide:true,stdio:'ignore',timeout:3000});
+  else backendProc?.kill();
+});
 app.on('window-all-closed',()=>app.quit());

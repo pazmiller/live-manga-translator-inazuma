@@ -7,7 +7,7 @@ _engine_lock = threading.RLock()
 
 
 def _make_engine(lang: str):
-    from rapidocr import RapidOCR, LangRec
+    from rapidocr import RapidOCR, LangRec, OCRVersion, ModelType
 
     lang_map = {
         "ja": LangRec.JAPAN,
@@ -15,8 +15,11 @@ def _make_engine(lang: str):
         "zh": LangRec.CH,
         "ko": LangRec.KOREAN,
     }
-    return RapidOCR(params={"Rec.lang_type": lang_map.get(lang, LangRec.CH),
-                            "Global.log_level": "warning"})
+    params = {"Rec.lang_type": lang_map.get(lang, LangRec.CH), "Global.log_level": "warning"}
+    # PP-OCRv6 small covers our Japanese/Chinese/English choices, but not Korean.
+    if lang == "ko":
+        params.update({"Rec.ocr_version": OCRVersion.PPOCRV5, "Rec.model_type": ModelType.MOBILE})
+    return RapidOCR(params=params)
 
 
 def get_engine(lang: str):
