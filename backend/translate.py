@@ -79,12 +79,13 @@ def translate_deepseek(texts, source, target):
 
 
 class ArrayStream:
-    """Decode only complete JSON strings; escaped quotes may span chunks."""
-    def __init__(self):
+    """Decode complete JSON array items; escaped text may span chunks."""
+    def __init__(self, item_type=str):
         self.buffer = ""
         self.items = []
         self.pos = None
         self.decoder = json.JSONDecoder()
+        self.item_type = item_type
 
     def feed(self, chunk):
         self.buffer += chunk
@@ -103,11 +104,12 @@ class ArrayStream:
                 value, end = self.decoder.raw_decode(self.buffer, self.pos)
             except json.JSONDecodeError:
                 break
-            if not isinstance(value, str) or not value.strip():
+            if not isinstance(value, self.item_type) or (isinstance(value, str) and not value.strip()):
                 raise TranslationError("翻译返回空内容或格式错误，请重试")
             self.pos = end
-            self.items.append(value.strip())
-            out.append(value.strip())
+            item = value.strip() if isinstance(value, str) else value
+            self.items.append(item)
+            out.append(item)
         return out
 
     def finish(self, count):
@@ -115,19 +117,23 @@ class ArrayStream:
             parsed, _ = self.decoder.raw_decode(self.buffer, self.buffer.index("["))
         except (ValueError, json.JSONDecodeError):
             raise TranslationError("翻译响应不完整，请重试") from None
-        if (not isinstance(parsed, list) or any(not isinstance(x, str) for x in parsed)
-                or len(self.items) != count or [x.strip() for x in parsed] != self.items):
+        normalized = ([(x.strip() if isinstance(x, str) else x) for x in parsed]
+                      if isinstance(parsed, list) and self.item_type is str else parsed)
+        if (not isinstance(parsed, list) or any(not isinstance(x, self.item_type) for x in parsed)
+                or len(self.items) != count or normalized != self.items):
             raise TranslationError("翻译条数与原文不一致，请重试")
 
 
 def _deepseek_stream(texts, source, target):
     client = _deepseek_client()
 
-    numbered = "\n".join(f"{i}: {t}" for i, t in enumerate(texts))
+    numbered = json.dumps([{"index": i, "source": text} for i, text in enumerate(texts)], ensure_ascii=False)
     prompt = (
-        f"Translate each numbered manga speech bubble line from {LANG_NAMES.get(source, source)} "
+        f"Translate each manga speech bubble from {LANG_NAMES.get(source, source)} "
         f"to {LANG_NAMES.get(target, target)}, in natural, colloquial manga style. "
-        "Reply with ONLY a JSON array of strings, one translation per line, same order, same count:\n\n"
+        "For each input, copy its index and source exactly, then translate ONLY that source. "
+        "Reply with ONLY a JSON array in the same order and count, with objects shaped "
+        '{"index":0,"source":"exact input source","translation":"translated text"}:\n\n'
         f"{numbered}"
     )
     resp = client.chat.completions.create(
@@ -136,14 +142,21 @@ def _deepseek_stream(texts, source, target):
         temperature=0.3,
         stream=True,
     )
-    parser = ArrayStream()
+    parser = ArrayStream(dict)
+    emitted = 0
     try:
         for chunk in resp:
             if chunk.choices:
-                for value in parser.feed(chunk.choices[0].delta.content or ""):
-                    if len(parser.items) > len(texts):
+                for item in parser.feed(chunk.choices[0].delta.content or ""):
+                    if emitted >= len(texts):
                         raise TranslationError("翻译返回多余条目，请重试")
-                    yield value
+                    if item.get("index") != emitted or item.get("source") != texts[emitted]:
+                        raise TranslationError("翻译结果与原文对应错误，请重试")
+                    value = item.get("translation")
+                    if not isinstance(value, str) or not value.strip():
+                        raise TranslationError("翻译返回空内容或格式错误，请重试")
+                    emitted += 1
+                    yield value.strip()
         parser.finish(len(texts))
     finally:
         resp.close()

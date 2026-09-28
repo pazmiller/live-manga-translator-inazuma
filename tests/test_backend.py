@@ -5,7 +5,8 @@ import sys
 import threading
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import MagicMock, Mock, patch
 
 import numpy as np
 from PIL import Image
@@ -89,6 +90,27 @@ class TranslationTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 parser.feed(raw)
                 parser.finish(2)
+
+    def test_deepseek_response_must_match_each_source(self):
+        def response(items):
+            payload = json.dumps(items, ensure_ascii=False)
+            chunks = [payload[i:i+7] for i in range(0, len(payload), 7)]
+            stream = MagicMock()
+            stream.__iter__.return_value = iter(SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content=part))]) for part in chunks)
+            client = Mock()
+            client.chat.completions.create.return_value = stream
+            return client
+
+        # Two similar opening lines from the reported page must keep their own identity.
+        texts = ["ち違くてその…", "い、いやこれは…"]
+        valid = [{"index": 0, "source": texts[0], "translation": "one"},
+                 {"index": 1, "source": texts[1], "translation": "two"}]
+        with patch.object(translate, "_deepseek_client", return_value=response(valid)):
+            self.assertEqual(list(translate._deepseek_stream(texts, "ja", "zh-CN")), ["one", "two"])
+        swapped = [{**valid[0], "source": texts[1]}, {**valid[1], "source": texts[0]}]
+        with patch.object(translate, "_deepseek_client", return_value=response(swapped)):
+            with self.assertRaisesRegex(translate.TranslationError, "对应"):
+                list(translate._deepseek_stream(texts, "ja", "zh-CN"))
 
     def test_failed_batch_is_not_cached(self):
         def failed(*_):
