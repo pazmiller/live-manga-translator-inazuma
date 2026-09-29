@@ -23,7 +23,7 @@ global.fetch=async(url,options)=>{
   }
   if(url.endsWith('/translate/stream')) {
     const body=JSON.parse(options.body);requests.push(body);
-    const raw={id:0,x:60,y:60,w:140,h:80,text:'original',translated:'译文',can_replace:false};
+    const raw={id:0,x:60,y:60,w:140,h:80,text:'原文',translated:'清除',can_replace:false};
     const events=[{type:'regions',bubbles:[raw]},{type:'bubble',bubble:raw},{type:'done',count:1}];
     return new Response(events.map(event=>JSON.stringify(event)).join('\n')+'\n');
   }
@@ -79,7 +79,7 @@ async function translate(frame,provider,model,key) {
   assert.equal(requests.at(-1).provider,provider);
   assert.equal(requests.at(-1).model,model);
   assert.equal(requests.at(-1).api_key,key);
-  await until(()=>evaluate(frame,"document.querySelector('#lock span').textContent==='翻译选区'"),'translation complete');
+  await until(()=>evaluate(frame,"['翻译选区','Translate region'].includes(document.querySelector('#lock span').textContent)"),'translation complete');
 }
 app.whenReady().then(async()=>{
   try {
@@ -130,10 +130,47 @@ app.whenReady().then(async()=>{
     assert(await evaluate(win,"document.getElementById('feedback').getBoundingClientRect().bottom<=document.querySelector('footer').getBoundingClientRect().top"),'Error must be visible above the fixed actions');
     await click(win,'#cancel');await until(()=>win.isDestroyed(),'cancel closes window');
     assert.equal(await evaluate(frame,"document.getElementById('provider').value"),'deepseek');
+    const originalTarget=await evaluate(frame,"document.getElementById('target').value");
+    await click(frame,'#uiLanguage');
+    await until(()=>evaluate(frame,"document.documentElement.lang==='en'"),'English toolbar');
+    assert.equal(await evaluate(frame,"document.querySelector('#lock span').textContent"),'Translate region');
+    assert.equal(await evaluate(frame,"document.getElementById('target').value"),originalTarget,'UI language must not change translation target');
+    assert(await evaluate(frame,"Array.from(document.querySelectorAll('button,select')).filter(e=>e.getClientRects().length).every(e=>{const r=e.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth})"),'English toolbar controls fit');
+    frame.webContents.send('frame:status',{text:'正在翻译 2/5…'});
+    await until(()=>evaluate(frame,"document.getElementById('status').textContent==='Translating 2/5…'"),'localized progress');
+    await snapshot(frame,'frame-english.png');
+    await translate(frame,'deepseek','deepseek-flash','test-deepseek-key');
+    const overlay=BrowserWindow.getAllWindows().filter(w=>w.webContents.getURL().endsWith('overlay.html')).at(-1);
+    await until(()=>evaluate(overlay,"document.querySelector('.edit')?.textContent==='Edit'"),'English bubble controls');
+    assert.equal(await evaluate(overlay,"document.querySelector('.copy').textContent"),'清除','Manga translation is never localized');
+    await click(overlay,'.edit');
+    await until(()=>evaluate(overlay,"document.getElementById('editor-source').value==='原文'"),'saved source');
+    assert.equal(await evaluate(overlay,"document.getElementById('editor-translation').textContent"),'清除');
+    assert.equal(await evaluate(overlay,"document.getElementById('editor-save').textContent"),'Translate & save');
+    await snapshot(overlay,'editor-english.png');
+    await click(overlay,'#editor-close');
+    win=await open(frame);
+    assert.equal(await evaluate(win,"document.documentElement.lang"),'en','New windows inherit saved UI language');
+    assert.match(await evaluate(win,"document.getElementById('api-key').placeholder"),/Leave blank/);
+    await click(win,'#sync');
+    await until(()=>evaluate(win,"document.getElementById('feedback').textContent.includes('Invalid key')"),'English provider error');
+    await snapshot(win,'settings-english.png');
+    win.setResizable(true);win.setSize(440,610);await delay(100);
+    await click(win,'#sync');
+    await until(()=>evaluate(win,"document.getElementById('feedback').textContent.includes('Invalid key')"),'English small window error');
+    assert(await evaluate(win,"document.documentElement.scrollWidth<=innerWidth"),'English settings fit narrow windows');
+    await snapshot(win,'settings-english-small.png');
+    await click(win,'#cancel');await until(()=>win.isDestroyed(),'English cancel');
+    frame.webContents.reload();
+    await until(()=>evaluate(frame,"document.documentElement.lang==='en' && document.querySelector('#lock span')?.textContent==='Translate region'"),'language persists after reload');
+    win=await open(frame);await click(win,'#uiLanguage');
+    await until(()=>evaluate(frame,"document.querySelector('#lock span').textContent==='翻译选区'"),'Chinese synchronized across windows');
+    assert.equal(await evaluate(win,"document.getElementById('save').textContent"),'保存并使用');
+    await click(win,'#cancel');await until(()=>win.isDestroyed(),'Chinese cancel');
     const saved=fs.readFileSync(path.join(userData,'ai-settings.json'),'utf8');
     assert(!saved.includes('test-openai-key')&&!saved.includes('test-gemini-key')&&!saved.includes('test-deepseek-key'));
     assert(!fs.existsSync(path.join(userData,'settings.env.txt')));
-    console.log('PASS: AI settings window, three providers, custom model, sync/error, encrypted save/reopen, and immediate translation routing');
+    console.log('PASS: AI settings, provider routing, encrypted keys, English/Chinese persistence and cross-window sync, source/translation protection');
     app.quit();
   } catch(error) {console.error(error);app.exit(1);}
 });

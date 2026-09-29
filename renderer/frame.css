@@ -19,6 +19,12 @@ h1 { font-size: 12px; margin: 0; font-weight: 650; letter-spacing: .03em; }
 .heading-hint { color: var(--glass-muted); font-size: 10px; margin-left: 4px; }
 .drag-handle { margin: 0 auto; font-size: 18px; line-height: 1; color: var(--glass-muted); opacity:.7; }
 .heading .text-button { font-size: 10px; height: 22px; padding: 0 7px; color: var(--glass-muted); }
+.heading #uiLanguage { color: var(--glass-accent); font-size: 11px; font-weight: 650; border-color: var(--glass-hairline); flex-shrink: 0; }
+html[lang="en"] .heading-hint { display: none; }
+html[lang="en"] #source { width: 106px; }
+html[lang="en"] #target { width: 112px; }
+html[lang="en"] #glassTone { width: 75px; }
+html[lang="en"] .translate-actions { min-width: 145px; }
 #configuration { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; height: 28px; padding: 0 10px; border-radius: 10px; border-color: var(--glass-accent); background: var(--accent-soft); color: var(--glass-accent); font-size: 12px; font-weight: 650; }
 #configuration:hover { background: var(--glass-control-hover); box-shadow: 0 2px 8px #087cff25, inset 0 1px 0 #ffffff80; }
 #configuration svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; }

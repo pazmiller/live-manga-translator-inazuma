@@ -9,6 +9,9 @@ button:focus-visible,input:focus-visible,select:focus-visible,.provider-card:has
 .titlebar { height:48px; padding:0 18px 0 30px; display:flex; align-items:center; justify-content:space-between; flex-shrink:0; -webkit-app-region:drag; }
 .wordmark { font-size:10px; font-weight:750; letter-spacing:.18em; color:#64758b; }
 .wordmark span { color:#9aa7bb; margin-left:6px; }
+#uiLanguage { -webkit-app-region:no-drag; margin-left:auto; margin-right:8px; border:1px solid #ccd9ef; border-radius:9px; padding:5px 10px; background:#ffffff90; color:#496ccc; font-size:12px; font-weight:600; }
+html[lang="en"] .key-input input { padding-right:66px; }
+html[lang="en"] .intro h2 { font-size:22px; line-height:1.35; }
 .close { -webkit-app-region:no-drag; border:0; background:transparent; width:32px; height:32px; font-size:23px; line-height:1; color:#64758b; border-radius:50%; }
 .close:hover { background:#e0e7f3; color:#193556; }
 main { padding:8px 32px 90px; overflow:auto; flex:1; scroll-padding-bottom:90px; }

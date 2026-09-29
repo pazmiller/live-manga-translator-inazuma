@@ -79,3 +79,4 @@ body.revealed .bubble,body.revealed .anchor,body.revealed #leaders,body.revealed
 @media (prefers-reduced-motion:reduce) { #progress i { animation:none; } #bubble-editor button { transition:none; } }
 @media (prefers-reduced-transparency:reduce) { .inplace .controls,#progress,#bubble-editor { backdrop-filter:none; background:var(--glass-panel-bg); } .bubble.reading { background:var(--glass-reading); } }
 
+html[lang="en"] .editor-actions { flex-wrap: wrap; gap: 10px; }
