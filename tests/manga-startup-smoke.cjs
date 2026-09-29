@@ -6,6 +6,8 @@ const root=path.resolve(__dirname,'..');
 app.setPath('userData',path.join(root,'.qa','manga-startup-user-data'));
 app.commandLine.appendSwitch('smoke-test');
 process.env.MWT_BACKEND_PORT='18767';
+process.env.HF_HUB_OFFLINE='1';
+process.env.TRANSFORMERS_OFFLINE='1';
 require('../main.js');
 
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
@@ -24,8 +26,11 @@ app.whenReady().then(async()=>{
     const frame=await until(()=>BrowserWindow.getAllWindows().find(win=>win.webContents.getURL().includes('frame.html')),'frame');
     const health=()=>frame.webContents.executeJavaScript('window.api.health()',true);
     await until(()=>frame.webContents.executeJavaScript('Boolean(window.api?.health)',true),'preload');
+    let lastState='';
     const ready=await until(async()=>{
       const state=await health();
+      const status=JSON.stringify({ocr:state.ocr,manga:state.manga_ocr_state});
+      if(status!==lastState){console.log(status);lastState=status;}
       assert.equal(state.protocol,4);
       if(state.manga_ocr_state==='error' || state.manga_ocr_state==='missing') throw new Error(`Manga OCR ${state.manga_ocr_state}`);
       return state.ocr==='ready' && state.manga_ocr_state==='ready' ? state : null;
@@ -35,6 +40,6 @@ app.whenReady().then(async()=>{
     app.quit();
   } catch(error) {
     console.error(error);
-    app.exit(1);
+    app.once('will-quit',()=>app.exit(1));app.quit();
   }
 });

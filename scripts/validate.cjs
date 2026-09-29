@@ -76,8 +76,11 @@ async function main() {
     ui('glass-app', '实验折射主进程集成', 'glass-app-smoke.cjs')] : [
     {id:'unit', label:'基础测试', command:process.execPath,
       args:['--test', ...fs.readdirSync(path.join(root,'tests')).filter(file=>file.endsWith('.test.cjs')).sort().map(file=>path.join(root,'tests',file))], timeoutMs:30000},
+    {id:'backend', label:'后端接口与身份验证', command:path.join(root,'backend','.venv','Scripts','python.exe'),
+      args:['-m','unittest','discover','-s','tests','-p','test_*.py'], timeoutMs:60000},
     ui('ui', 'UI 功能与布局', 'renderer-smoke.cjs'),
     ui('settings', 'AI 设置与模型切换', 'settings-ui.cjs'),
+    ui('auth-ui', '认证后翻译与编辑流程', 'backend-auth-ui.cjs'),
     ui('input', 'Windows 原生输入', 'toolbar-input.cjs'),
     ui('responsive', '正常 GPU 响应性能', 'glass-responsive.cjs'),
   ];

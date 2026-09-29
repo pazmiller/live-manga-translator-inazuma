@@ -1,21 +1,21 @@
 const {app, BrowserWindow, ipcMain, desktopCapturer, screen, globalShortcut, nativeImage, safeStorage} = require('electron');
 const path = require('path');
 const os = require('os');
-const {spawn, spawnSync} = require('child_process');
+const {createBackendService} = require('./backend-service.cjs');
+const {AUTH_ERROR} = require('./backend-client.cjs');
 const {readEvents, localBubble, intersect} = require('./pipeline');
 const {ReadingWatch} = require('./reading-watch');
 const {makeGlassCapture} = require('./glass-capture');
 const {createSettingsStore} = require('./settings-store.cjs');
 
 let BACKEND_PORT = Number(process.env.MWT_BACKEND_PORT || 8765);
-let BACKEND_URL = `http://127.0.0.1:${BACKEND_PORT}`;
 const BORDER = 6, MIN_SIZE = 64;
 const windowsBuild = Number(os.release().split('.')[2]);
 const supportsWatch = process.platform === 'win32' && windowsBuild >= 19041;
 // getSources is a screenshot API, not a low-latency video feed. On Windows it
 // can stall the input thread for hundreds of milliseconds even when awaited.
 const experimentalGlassCapture = process.env.MWT_GLASS_CAPTURE === '1';
-let frameWin, selectionWin, backendProc, cursorTimer, watchTimer, glassTimer;
+let frameWin, selectionWin, backend, cursorTimer, watchTimer, glassTimer;
 let settingsWin, settingsStore;
 let activeJob = null, bubbleTask = null, lastBatch = null, editorWin = null;
 let jobNumber = 0, generation = 0, reveal = false, interactionLocked = false;
@@ -122,36 +122,27 @@ async function waitForBackend(signal,timeoutMs=60000) {
   while(Date.now()-start<timeoutMs) {
     signal?.throwIfAborted();if(backendError) throw new Error(backendError);
     try {
-      const response=await fetch(`${BACKEND_URL}/health`,{signal:AbortSignal.timeout(1000)});
+      const response=await backend.request('/health',{signal:AbortSignal.any([AbortSignal.timeout(1000), ...(signal?[signal]:[])])});
       if(response.ok) {
         const data=await response.json();
         if(data.service!=='manga-window-translator' || data.protocol!==4) throw new Error('端口上是旧版服务，请退出旧版应用后重试');
         const settings=settingsStore.summary();
         return {...data,settings,providers:Object.fromEntries(Object.entries(settings.providers).map(([id,config])=>[id,config.hasKey]))};
       }
-    } catch(error) {if(error.message.includes('旧版服务')) throw error;}
+    } catch(error) {if(error.message===AUTH_ERROR || error.message.includes('旧版服务')) throw error;}
     await sleep(200);
   }
   throw new Error('后端启动超时，请检查 Python 环境后重启');
 }
-async function startBackend() {
-  try {
-    const response=await fetch(`${BACKEND_URL}/health`,{signal:AbortSignal.timeout(700)});
-    if(response.ok) {
-      const info=await response.json();
-      if(info.service==='manga-window-translator' && info.protocol===4) return;
-      backendError='端口被旧版服务占用，请退出旧版应用后重试';return;
-    }
-  } catch {}
+function startBackend() {
   const backendDir=app.isPackaged ? path.join(process.resourcesPath,'backend') : path.join(__dirname,'backend');
   const executable=app.isPackaged ? path.join(backendDir,'inazuma-backend.exe') : path.join(backendDir,'.venv','Scripts','python.exe');
   const args=app.isPackaged ? [String(BACKEND_PORT)] : ['server.py',String(BACKEND_PORT)];
-  backendProc=spawn(executable,args,{
-    cwd:backendDir,stdio:['ignore','pipe','pipe'],windowsHide:true,env:{...process.env,PYTHONIOENCODING:'utf-8',
-      ...(app.isPackaged ? {MWT_ENV_FILE:path.join(app.getPath('userData'),'settings.env.txt')} : {})}});
-  backendProc.stdout.on('data',d=>process.stdout.write(`[py] ${d}`));backendProc.stderr.on('data',d=>process.stderr.write(`[py] ${d}`));
-  backendProc.on('error',()=>{backendError=app.isPackaged ? '内置识别服务启动失败，请重新安装应用' : 'Python 启动失败，请按 README 安装后端环境';});
-  backendProc.on('exit',()=>{backendProc=null;backendError='后端已停止，请重启应用';});
+  backend=createBackendService({executable,args,cwd:backendDir,port:BACKEND_PORT,
+    env:{...process.env,PYTHONIOENCODING:'utf-8',
+      ...(app.isPackaged ? {MWT_ENV_FILE:path.join(app.getPath('userData'),'settings.env.txt')} : {})},
+    onError:()=>{backendError='后端启动失败或已停止，请检查端口占用后重启应用';}});
+  backend.start();
 }
 function cancelJob() {activeJob?.controller.abort();bubbleTask?.abort();}
 function recoveryState() {
@@ -210,7 +201,7 @@ async function runLock(opts,retry=false) {
     begun=true;progress(retry?'正在补译剩余内容…':'正在识别文字…');
     const body={image:capture.png.toString('base64'),source:opts.source,target:opts.target,...settingsStore.credentials(opts.provider,opts.model)};
     if(retry) body.only_ids=[...context.regions.keys()].filter(id=>!context.completed.has(id));
-    const response=await fetch(`${BACKEND_URL}/translate/stream`,{method:'POST',signal,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const response=await backend.request('/translate/stream',{method:'POST',signal,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     let summary;
     await readEvents(response,event=>{
       if(!current()) return;
@@ -293,7 +284,7 @@ async function enhanceSelection() {
     }
   };
   const post=async(path,body,timeout)=>{
-    const response=await fetch(`${BACKEND_URL}${path}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),
+    const response=await backend.request(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),
       signal:AbortSignal.any([controller.signal,AbortSignal.timeout(timeout)])});
     const data=await response.json();
     controller.signal.throwIfAborted();
@@ -354,7 +345,7 @@ async function bubbleAction(key,kind,text) {
     const {entry,context}=bubbleEntry(key),savedGeneration=generation;
     const recognition=kind==='ocr'||kind==='manga-ocr';
     const body=recognition?{image:bubbleCrop(entry,context,kind==='manga-ocr'?16:8).toPNG().toString('base64'),source:context.opts.source}:{text,source:context.opts.source,target:context.opts.target,...settingsStore.credentials(context.opts.provider,context.opts.model)};
-    const response=await fetch(`${BACKEND_URL}/bubble/${kind}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.any([controller.signal,AbortSignal.timeout(kind==='manga-ocr'?40000:60000)])});
+    const response=await backend.request(`/bubble/${kind}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.any([controller.signal,AbortSignal.timeout(kind==='manga-ocr'?40000:60000)])});
     const data=await response.json();controller.signal.throwIfAborted();
     if(!response.ok) throw new Error(typeof data.detail==='string'?data.detail:'单条处理失败，请检查原文后重试');
     if(generation!==savedGeneration || results.get(key)!==entry) throw new Error('这条译文已变化，请重新打开编辑');
@@ -497,14 +488,13 @@ function updateMouse() {
 app.whenReady().then(async()=>{
   settingsStore=createSettingsStore({file:path.join(app.getPath('userData'),'ai-settings.json'),safeStorage,
     legacyFiles:[process.env.MWT_ENV_FILE || (app.isPackaged ? path.join(app.getPath('userData'),'settings.env.txt') : path.join(__dirname,'.env'))]});
-  if(app.isPackaged && !process.env.MWT_BACKEND_PORT) {
+  if(!process.env.MWT_BACKEND_PORT) {
     // Each installed instance owns its backend; never borrow a development
     // server's credentials or terminate another instance's service on exit.
     BACKEND_PORT=await new Promise((resolve,reject)=>{
       const server=require('node:net').createServer();server.once('error',reject);
       server.listen(0,'127.0.0.1',()=>{const port=server.address().port;server.close(()=>resolve(port));});
     });
-    BACKEND_URL=`http://127.0.0.1:${BACKEND_PORT}`;
   }
   startBackend();createWindows();cursorTimer=setInterval(updateMouse,40);watchTimer=setInterval(watchSelection,850);
   if(experimentalGlassCapture) glassTimer=setInterval(()=>glassCapture.tick(),150);
@@ -516,8 +506,6 @@ app.whenReady().then(async()=>{
 app.on('before-quit',()=>{
   cancelJob();clearInterval(cursorTimer);clearInterval(watchTimer);clearInterval(glassTimer);
   glassCapture.dispose();globalShortcut.unregisterAll();
-  if(backendProc?.pid && process.platform==='win32')
-    spawnSync('taskkill.exe',['/PID',String(backendProc.pid),'/T','/F'],{windowsHide:true,stdio:'ignore',timeout:3000});
-  else backendProc?.kill();
+  backend?.close();
 });
 app.on('window-all-closed',()=>app.quit());

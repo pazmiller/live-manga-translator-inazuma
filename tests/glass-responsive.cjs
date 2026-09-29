@@ -14,6 +14,7 @@ const ignore=BrowserWindow.prototype.setIgnoreMouseEvents;
 BrowserWindow.prototype.setIgnoreMouseEvents=function(){return ignore.call(this,true,{forward:true});};
 BrowserWindow.prototype.focus=function(){};
 app.on('browser-window-created',(_,win)=>{win.setFocusable(false);win.setIgnoreMouseEvents(true);});
+require('./mock-backend.cjs')();
 require('../main');
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 app.whenReady().then(async()=>{

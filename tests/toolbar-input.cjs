@@ -22,6 +22,7 @@ app.whenReady().then(()=>{screen.getCursorScreenPoint=()=>pointer;});
 BrowserWindow.prototype.setIgnoreMouseEvents=function(value){ignoreRequests.set(this.id,value);return originalIgnore.call(this,true,{forward:true});};
 BrowserWindow.prototype.focus=function(){};
 app.on('browser-window-created',(_,win)=>{win.setFocusable(false);win.setIgnoreMouseEvents(true);});
+require('./mock-backend.cjs')();
 require('../main');
 app.whenReady().then(async()=>{
   try {

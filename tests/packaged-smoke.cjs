@@ -4,6 +4,8 @@ const fs=require('node:fs');
 const path=require('node:path');
 const net=require('node:net');
 const assert=require('node:assert/strict');
+const {randomBytes}=require('node:crypto');
+const {createBackendClient}=require('../backend-client.cjs');
 const root=path.resolve(__dirname,'..');
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function freePort(){return new Promise(resolve=>{const s=net.createServer();s.listen(0,'127.0.0.1',()=>{const p=s.address().port;s.close(()=>resolve(p));});});}
@@ -36,38 +38,52 @@ async function main(){
   for(const key of ['OPENAI_API_KEY','GEMINI_API_KEY','DEEPSEEK_API_KEY','ANTHROPIC_API_KEY','ELECTRON_RUN_AS_NODE','MWT_GLASS_CAPTURE','MWT_ENV_FILE'])delete env[key];
   let child,exited=true;
   const output=chunk=>fs.appendFileSync(path.join(data,'app.log'),chunk);
-  child=spawn(exe,[`--user-data-dir=${data}`,`--remote-debugging-port=${debug}`,'--smoke-test'],{cwd:data,env,windowsHide:true,stdio:['ignore','pipe','pipe']});
-  exited=false;child.once('exit',()=>{exited=true;});child.stdout.on('data',output);child.stderr.on('data',output);
+  // Probe the bundled worker with our own private session; never obtain the
+  // running application's session secret via a debug API or environment bypass.
+  const probePort=await freePort(),secret=randomBytes(32);
+  const client=createBackendClient({port:probePort,secret});
+  const probe=spawn(path.join(path.dirname(exe),'resources/backend/inazuma-backend.exe'),[String(probePort)],
+    {cwd:data,env:{...env,MWT_ENV_FILE:path.join(data,'no-legacy.env')},windowsHide:true,stdio:['pipe','pipe','pipe']});
+  let probeExited=false;probe.once('exit',()=>{probeExited=true;});
+  probe.stdin.on('error',()=>{});probe.stdin.end(secret.toString('hex')+'\n');
+  probe.stdout.on('data',output);probe.stderr.on('data',output);
+  async function stopProbe(){client.close();if(!probeExited)await new Promise(resolve=>spawn('taskkill.exe',['/PID',String(probe.pid),'/T','/F'],{windowsHide:true,stdio:'ignore'}).on('close',resolve));}
   let ws;
   try {
-    const health=await until(async()=>{const r=await fetch(`http://127.0.0.1:${port}/health`);const h=await r.json();return h.ocr==='ready'&&h;},'bundled OCR startup');
+    const health=await until(async()=>{const r=await client.request('/health');const h=await r.json();return h.ocr==='ready'&&h;},'bundled OCR startup');
+    assert.equal((await fetch(`http://127.0.0.1:${probePort}/health`)).status,401);
     console.log('Bundled backend ready; testing Japanese OCR');
     assert.equal(health.protocol,4);
     assert(Object.values(health.providers).every(value=>value===false),'No development credentials may leak into distribution');
     if(manga) {
-      await until(async()=>{const h=await(await fetch(`http://127.0.0.1:${port}/health`)).json();return h.manga_ocr_state==='ready';},'offline bundled Manga OCR startup');
+      await until(async()=>{const h=await(await client.request('/health')).json();return h.manga_ocr_state==='ready';},'offline bundled Manga OCR startup');
       const image=fs.readFileSync(path.join(root,'.qa/fixture-bubble.png')).toString('base64');
       for(let attempt=0;attempt<2;attempt++) {
         const start=Date.now();
-        const result=await fetch(`http://127.0.0.1:${port}/bubble/manga-ocr`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image,source:'ja'})});
+        const result=await client.request('/bubble/manga-ocr',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image,source:'ja'})});
         const answer=await result.json();assert(result.ok,JSON.stringify(answer));assert.match(answer.text,/一緒に行こう/);
         console.log(`Offline bundled Manga OCR pass ${attempt+1}: ${Date.now()-start} ms, ${answer.text.length} characters`);
       }
       assert(!fs.existsSync(env.HF_HOME),'Bundled Manga OCR must not populate an external model cache');
     }
-    const response=await fetch(`http://127.0.0.1:${port}/bubble/ocr`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image:fs.readFileSync(path.join(root,'.qa/fixture.png')).toString('base64'),source:'ja'})});
+    const response=await client.request('/bubble/ocr',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image:fs.readFileSync(path.join(root,'.qa/fixture.png')).toString('base64'),source:'ja'})});
     const ocr=await response.json();assert(response.ok,JSON.stringify(ocr));assert(ocr.text.length>0);
     for(const source of ['en','zh','ko']){
       console.log(`Testing ${source} OCR`);
-      const result=await fetch(`http://127.0.0.1:${port}/bubble/ocr`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image:fs.readFileSync(path.join(root,'.qa/fixture.png')).toString('base64'),source})});
+      const result=await client.request('/bubble/ocr',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image:fs.readFileSync(path.join(root,'.qa/fixture.png')).toString('base64'),source})});
       assert(result.ok,`${source}: ${await result.text()}`);
     }
+    await stopProbe();
+    child=spawn(exe,[`--user-data-dir=${data}`,`--remote-debugging-port=${debug}`,'--smoke-test'],{cwd:data,env,windowsHide:true,stdio:['ignore','pipe','pipe']});
+    exited=false;child.once('exit',()=>{exited=true;});child.stdout.on('data',output);child.stderr.on('data',output);
     const target=await until(async()=>{const tabs=await(await fetch(`http://127.0.0.1:${debug}/json/list`)).json();return tabs.find(t=>t.url.endsWith('frame.html'));},'packaged toolbar');
     ws=new WebSocket(target.webSocketDebuggerUrl);await new Promise((resolve,reject)=>{ws.onopen=resolve;ws.onerror=reject;});
     let next=0;const pending=new Map();
     ws.onmessage=event=>{const msg=JSON.parse(event.data);if(pending.has(msg.id)){const {resolve,reject}=pending.get(msg.id);pending.delete(msg.id);msg.error?reject(Error(msg.error.message)):resolve(msg.result);}};
     function cdp(method,params={}){return new Promise((resolve,reject)=>{const id=++next;pending.set(id,{resolve,reject});ws.send(JSON.stringify({id,method,params}));});}
     async function evaluate(expression){const r=await cdp('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true});if(r.exceptionDetails)throw Error(JSON.stringify(r.exceptionDetails));return r.result.value;}
+    await until(async()=>{const state=await evaluate('window.api.health()');return state.ocr==='ready';},'application-owned authenticated backend');
+    assert.equal((await fetch(`http://127.0.0.1:${port}/health`)).status,401);
     assert.equal(await evaluate('typeof window.api.configuration'),'function');
     await evaluate("document.getElementById('clear').click()");await delay(200);
     assert.equal(await evaluate("document.getElementById('status').textContent"),'已清除');
@@ -88,6 +104,7 @@ async function main(){
     await until(async()=>{try{await fetch(`http://127.0.0.1:${port}/health`);return false;}catch{return true;}},'backend shutdown');
     console.log(JSON.stringify({passed:true,exe,mangaOcrOffline:manga,ocrCharacters:ocr.text.length,pythonOnPath:false,credentialsIncluded:false,quitAndBackendCleanup:true,evidence:data},null,2));
   } finally {
+    await stopProbe();
     ws?.close();
     if(!exited)await new Promise(resolve=>spawn('taskkill.exe',['/PID',String(child.pid),'/T','/F'],{windowsHide:true,stdio:'ignore'}).on('close',resolve));
   }

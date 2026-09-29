@@ -1,6 +1,8 @@
 // Localize application chrome only. OCR text, translations and input values are excluded.
 (() => {
   const messages = Object.fromEntries(`
+后端身份验证失败，已停止发送数据，请重启应用|Backend identity verification failed. No data was sent. Please restart the app.
+后端启动失败或已停止，请检查端口占用后重启应用|Backend failed to start or stopped. Check for a port conflict and restart the app.
 译窗|Inazuma
 漫画翻译工具栏|Manga translation toolbar
 漫画翻译选区|Manga translation region

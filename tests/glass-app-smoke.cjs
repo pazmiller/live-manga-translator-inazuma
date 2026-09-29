@@ -98,6 +98,7 @@ global.fetch = async (url, options = {}) => {
     {type:'done', count:1, timings:{total:0.01}},
   ].map(event => JSON.stringify(event)).join('\n') + '\n', {headers:{'Content-Type':'application/x-ndjson'}});
 };
+require('./mock-backend.cjs')();
 require('../main.js');
 
 async function until(check, description, timeout = 10000) {

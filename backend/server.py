@@ -34,6 +34,7 @@ if _env.exists():
 import ocr
 import translate
 from manga_worker import MangaWorker, MangaWorkerError
+from local_auth import LocalAuth, read_session_key
 
 _warm = {"state": "loading"}
 _slots = threading.BoundedSemaphore(2)
@@ -74,6 +75,8 @@ async def lifespan(app):
 
 
 app = FastAPI(lifespan=lifespan)
+app.state.session_key = None
+app.add_middleware(LocalAuth, key=lambda: app.state.session_key)
 
 
 @app.exception_handler(RequestValidationError)
@@ -380,5 +383,9 @@ def do_translate(req: TranslateReq):
 
 if __name__ == "__main__":
     import uvicorn
+    try:
+        app.state.session_key = read_session_key(sys.stdin.buffer)
+    except (ValueError, AttributeError):
+        raise SystemExit('Backend must be started by Inazuma') from None
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8765
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")

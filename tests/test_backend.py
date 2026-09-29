@@ -139,11 +139,11 @@ class TranslationTests(unittest.TestCase):
 
 class EndpointTests(unittest.TestCase):
     def setUp(self):
-        from fastapi.testclient import TestClient
+        from backend_test_support import authenticated_client
         import server
         self.server = server
         server._ocr_cache.clear()
-        self.client = TestClient(server.app)
+        self.client = authenticated_client(server)
         buffer = io.BytesIO()
         Image.new("RGB", (100, 100), "white").save(buffer, format="PNG")
         self.payload = dict(image=base64.b64encode(buffer.getvalue()).decode(), provider="google")

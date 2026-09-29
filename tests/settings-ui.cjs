@@ -34,6 +34,7 @@ app.on('browser-window-created',(_,win)=>win.webContents.setBackgroundThrottling
 app.whenReady().then(()=>{screen.getCursorScreenPoint=()=>pointer;});
 desktopCapturer.getSources=async()=>[{display_id:String(screen.getPrimaryDisplay().id),
   thumbnail:nativeImage.createFromPath(path.join(qa,'fixture.png'))}];
+require('./mock-backend.cjs')();
 require('../main.js');
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function until(check,label,timeout=10000) {

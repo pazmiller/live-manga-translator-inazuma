@@ -9,7 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from fastapi.testclient import TestClient
+from backend_test_support import authenticated_client
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
@@ -27,7 +27,7 @@ def png_payload(size=(300, 100)):
 
 class BubbleActionTests(unittest.TestCase):
     def setUp(self):
-        self.client = TestClient(server.app)
+        self.client = authenticated_client(server)
         server._ocr_cache.clear()
         translate._cache.clear()
         self.image = png_payload()
@@ -175,7 +175,7 @@ class BubbleActionTests(unittest.TestCase):
 
 class SelectedRetryTests(unittest.TestCase):
     def setUp(self):
-        self.client = TestClient(server.app)
+        self.client = authenticated_client(server)
         server._ocr_cache.clear()
         translate._cache.clear()
         self.payload = dict(image=png_payload(), source="en", target="zh-CN", provider="google")

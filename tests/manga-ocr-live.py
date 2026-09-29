@@ -7,7 +7,7 @@ import sys
 import time
 from pathlib import Path
 
-from fastapi.testclient import TestClient
+from backend_test_support import authenticated_client
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,7 +19,7 @@ def main():
     if not server.manga_ocr_python():
         raise SystemExit("Set MWT_MANGA_OCR_PYTHON to the optional Manga OCR Python executable")
     report = []
-    with TestClient(server.app) as client:
+    with authenticated_client(server) as client:
         for number in (1, 2):
             stem = f"real-{number:02d}"
             bubble = json.loads((ROOT / ".qa" / f"live-{stem}.json").read_text(encoding="utf-8"))["bubbles"][0]

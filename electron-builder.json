@@ -2,7 +2,7 @@
   "appId": "com.inazuma.mangatranslator",
   "productName": "Inazuma",
   "directories": {"output": "dist"},
-  "files": ["main.js", "preload.js", "settings-preload.cjs", "settings-store.cjs", "backend/provider-catalog.json", "pipeline.js", "reading-watch.js", "glass-capture.js", "renderer/**/*", "package.json"],
+  "files": ["main.js", "backend-client.cjs", "backend-service.cjs", "preload.js", "settings-preload.cjs", "settings-store.cjs", "backend/provider-catalog.json", "pipeline.js", "reading-watch.js", "glass-capture.js", "renderer/**/*", "package.json"],
   "extraResources": [{"from": ".build/backend/inazuma-backend", "to": "backend"}],
   "asar": true,
   "npmRebuild": false,

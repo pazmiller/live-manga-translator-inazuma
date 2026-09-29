@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from fastapi.testclient import TestClient
+from backend_test_support import authenticated_client
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'backend'))
@@ -63,7 +63,7 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(len(calls), 4)
 
     def test_http_single_batch_and_stream_receive_request_credentials(self):
-        http = TestClient(server.app)
+        http = authenticated_client(server)
         self.addCleanup(http.close)
         config = dict(provider='openai', model='custom-model', api_key='test-private-key', source='ja', target='zh-CN')
         with patch.object(translate, '_llm_client', side_effect=lambda *_: client_for(['original'])[0]):
