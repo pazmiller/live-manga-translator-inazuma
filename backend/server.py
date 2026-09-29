@@ -42,6 +42,9 @@ _ocr_cache_lock = threading.Lock()
 
 
 def manga_ocr_python():
+    if getattr(sys, "frozen", False):
+        bundled = Path(sys.executable).parent.parent / "manga-ocr" / "inazuma-manga-ocr.exe"
+        return bundled if bundled.is_file() else None
     if not Path(__file__).with_name("manga_ocr_worker.py").is_file():
         return None
     configured = os.getenv("MWT_MANGA_OCR_PYTHON")
@@ -49,7 +52,7 @@ def manga_ocr_python():
     return candidate if candidate.is_file() else None
 
 
-_manga = MangaWorker(manga_ocr_python, Path(__file__).with_name("manga_ocr_worker.py"))
+_manga = MangaWorker(manga_ocr_python, None if getattr(sys, "frozen", False) else Path(__file__).with_name("manga_ocr_worker.py"))
 
 
 def prewarm():

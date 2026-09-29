@@ -1,6 +1,6 @@
 {
   "name": "manga-window-translator",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Live manga translation for Windows",
   "main": "main.js",
   "scripts": {
@@ -18,6 +18,7 @@
     "test:manga:ui": "node tests/run-electron.cjs manga-ui-live.cjs",
     "test:settings": "node tests/run-electron.cjs settings-ui.cjs",
     "dist:win": "node scripts/build-windows.cjs",
+    "dist:win:manga": "node scripts/build-windows.cjs --manga",
     "test:packaged": "node tests/packaged-smoke.cjs"
   },
   "keywords": [],

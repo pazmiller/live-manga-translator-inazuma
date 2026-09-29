@@ -48,6 +48,9 @@ add(70, 505, ["誰かいる？", "返事をして。"], "有人在吗？回答�
 add(560, 490, ["大丈夫だよ。", "心配しないで。"], "没事的，不用担心。", bg="#ddd2eb", textured=True)
 add(824, 643, ["ありがとう"], "Thank you for everything you have done for us.")
 im.save(OUT / "fixture.png")
+first = bubbles[0]
+im.crop((first["x"]-16, first["y"]-16, first["x"]+first["w"]+16,
+         first["y"]+first["h"]+16)).save(OUT / "fixture-bubble.png")
 (OUT / "fixture.json").write_text(json.dumps(bubbles, ensure_ascii=False), encoding="utf-8")
 sys.path.insert(0, str(OUT.parent / "backend"))
 import numpy as np

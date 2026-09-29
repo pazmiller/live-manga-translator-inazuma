@@ -78,7 +78,8 @@ class MangaWorker:
         self._stop_locked()
         self.state = "loading"
         try:
-            process = subprocess.Popen([str(python), str(self.script)], stdin=subprocess.PIPE,
+            command = [str(python)] + ([str(self.script)] if self.script is not None else [])
+            process = subprocess.Popen(command, stdin=subprocess.PIPE,
                                        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                        text=True, encoding="utf-8", bufsize=1,
                                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))

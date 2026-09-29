@@ -3,12 +3,20 @@ import base64
 import io
 import json
 import sys
+import os
+from pathlib import Path
+
+if getattr(sys, "frozen", False):
+    import multiprocessing
+    multiprocessing.freeze_support()
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
 
 from PIL import Image
 from manga_ocr import MangaOcr
 
 
-model = MangaOcr()
+model = MangaOcr(str(Path(__file__).with_name("manga-model")), force_cpu=True) if getattr(sys, "frozen", False) else MangaOcr()
 print(json.dumps({"type": "ready"}), flush=True)
 for line in sys.stdin:
     try:
