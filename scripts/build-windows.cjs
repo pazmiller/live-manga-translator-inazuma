@@ -15,5 +15,6 @@ run(path.join(root,'backend','.venv','Scripts','python.exe'),['-m','PyInstaller'
   '--noconfirm','--onedir','--name','inazuma-backend','--distpath','.build/backend',
   '--workpath','.build/work','--specpath','.build','--collect-all','rapidocr',
   '--collect-all','onnxruntime','--collect-submodules','uvicorn','--collect-data','certifi',
+  '--add-data','backend/provider-catalog.json;.',
   'backend/server.py']);
 run(process.execPath,[require.resolve('electron-builder/cli.js'),'--win','--x64','--publish','never']);

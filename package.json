@@ -16,6 +16,7 @@
     "test:app:live": "node tests/run-electron.cjs app-smoke.cjs",
     "test:manga:startup": "node tests/run-electron.cjs manga-startup-smoke.cjs",
     "test:manga:ui": "node tests/run-electron.cjs manga-ui-live.cjs",
+    "test:settings": "node tests/run-electron.cjs settings-ui.cjs",
     "dist:win": "node scripts/build-windows.cjs",
     "test:packaged": "node tests/packaged-smoke.cjs"
   },

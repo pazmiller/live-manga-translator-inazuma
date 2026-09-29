@@ -18,8 +18,10 @@ from typing import Annotated, Literal
 import numpy as np
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
 from PIL import Image, UnidentifiedImageError
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, SecretStr, field_validator
 
 _env = Path(os.environ["MWT_ENV_FILE"]) if os.environ.get("MWT_ENV_FILE") else Path(__file__).resolve().parent.parent / ".env"
 if _env.exists():
@@ -71,14 +73,30 @@ async def lifespan(app):
 app = FastAPI(lifespan=lifespan)
 
 
+@app.exception_handler(RequestValidationError)
+async def invalid_request(_request, _error):
+    # Validation errors can otherwise echo the entire request, including keys.
+    return JSONResponse(status_code=422, content={"detail": "请求参数无效，请检查语言、模型和输入内容"})
+
+
+class ProviderReq(BaseModel):
+    provider: Literal["openai", "gemini", "deepseek", "google", "claude"] = "deepseek"
+    model: str | None = Field(default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
+    api_key: SecretStr | None = Field(default=None, max_length=4096)
+
+    def translation_options(self):
+        if self.model is None and self.api_key is None:
+            return {}
+        return {"config": {"model": self.model, "api_key": self.api_key.get_secret_value() if self.api_key else None}}
+
+
 class ImageReq(BaseModel):
     image: str = Field(max_length=24_000_000)
     source: Literal["ja", "en", "zh", "ko"] = "ja"
 
 
-class TranslateReq(ImageReq):
+class TranslateReq(ImageReq, ProviderReq):
     target: Literal["zh-CN", "zh-TW", "en", "ja"] = "zh-CN"
-    provider: Literal["google", "deepseek", "claude"] = "deepseek"
     only_ids: list[Annotated[int, Field(strict=True, ge=0)]] | None = Field(default=None, max_length=100)
 
     @field_validator("only_ids")
@@ -89,11 +107,10 @@ class TranslateReq(ImageReq):
         return ids
 
 
-class BubbleTranslateReq(BaseModel):
+class BubbleTranslateReq(ProviderReq):
     text: str = Field(min_length=1, max_length=4000)
     source: Literal["ja", "en", "zh", "ko"] = "ja"
     target: Literal["zh-CN", "zh-TW", "en", "ja"] = "zh-CN"
-    provider: Literal["google", "deepseek", "claude"] = "deepseek"
 
     @field_validator("text")
     @classmethod
@@ -103,11 +120,10 @@ class BubbleTranslateReq(BaseModel):
         return text.strip()
 
 
-class TextsTranslateReq(BaseModel):
+class TextsTranslateReq(ProviderReq):
     texts: list[Annotated[str, Field(min_length=1, max_length=4000)]] = Field(min_length=1, max_length=100)
     source: Literal["ja", "en", "zh", "ko"] = "ja"
     target: Literal["zh-CN", "zh-TW", "en", "ja"] = "zh-CN"
-    provider: Literal["google", "deepseek", "claude"] = "deepseek"
 
     @field_validator("texts")
     @classmethod
@@ -120,16 +136,15 @@ class TextsTranslateReq(BaseModel):
 @app.get("/health")
 def health():
     manga_state = _manga.status()
-    return {"ok": True, "service": "manga-window-translator", "protocol": 3,
+    return {"ok": True, "service": "manga-window-translator", "protocol": 4,
             "ocr": _warm["state"], "manga_ocr": manga_state == "ready",
             "manga_ocr_state": manga_state,
-            "providers": {"google": True, "deepseek": bool(os.getenv("DEEPSEEK_API_KEY")),
-                          "claude": bool(os.getenv("ANTHROPIC_API_KEY"))}}
+            "providers": {provider: bool(translate.provider_config(provider)['api_key']) for provider in translate.PROVIDERS}}
 
 
-def require_provider(provider):
-    if provider == "deepseek" and not os.getenv("DEEPSEEK_API_KEY"):
-        raise HTTPException(400, "请在 .env 配置 DEEPSEEK_API_KEY 后重启")
+def require_provider(provider, config=None):
+    if provider in translate.PROVIDERS and not translate.provider_config(provider, config)['api_key']:
+        raise HTTPException(400, "请打开 翻译AI配置，为所选服务商填写 API Key")
     if provider == "claude" and not os.getenv("ANTHROPIC_API_KEY"):
         raise HTTPException(400, "请在 .env 配置 ANTHROPIC_API_KEY 后重启")
 
@@ -181,7 +196,7 @@ def pipeline(req, pil, digest, cancelled):
     translated = cached = 0
     if bubbles:
         yield {"type": "progress", "stage": "translation", "text": f"识别到 {len(bubbles)} 处，正在翻译…"}
-        for b in translate.translated_bubbles(bubbles, pil, req.source, req.target, req.provider, cancelled):
+        for b in translate.translated_bubbles(bubbles, pil, req.source, req.target, req.provider, cancelled, **req.translation_options()):
             if cancelled.is_set():
                 return
             translated += 1
@@ -257,11 +272,11 @@ def bubble_manga_ocr(req: ImageReq):
 
 @app.post("/bubble/translate")
 def bubble_translate(req: BubbleTranslateReq):
-    require_provider(req.provider)
+    require_provider(req.provider, **req.translation_options())
     if not _slots.acquire(blocking=False):
         raise HTTPException(429, "翻译服务忙，请稍后重试")
     try:
-        translated = translate.translate_text(req.text, req.source, req.target, req.provider)
+        translated = translate.translate_text(req.text, req.source, req.target, req.provider, **req.translation_options())
         return {"text": req.text, "translated": translated}
     except Exception as error:
         raise HTTPException(502, error_message(error)) from None
@@ -271,7 +286,7 @@ def bubble_translate(req: BubbleTranslateReq):
 
 @app.post("/selection/translate-texts")
 def selection_translate_texts(req: TextsTranslateReq):
-    require_provider(req.provider)
+    require_provider(req.provider, **req.translation_options())
     if not _slots.acquire(blocking=False):
         raise HTTPException(429, "翻译服务忙，请稍后重试")
     try:
@@ -280,7 +295,7 @@ def selection_translate_texts(req: TextsTranslateReq):
         else:
             bubbles = [{"id": index, "text": text} for index, text in enumerate(req.texts)]
             values = [item["translated"] for item in translate.translated_bubbles(
-                bubbles, None, req.source, req.target, req.provider, threading.Event())]
+                bubbles, None, req.source, req.target, req.provider, threading.Event(), **req.translation_options())]
         if len(values) != len(req.texts):
             raise translate.TranslationError("翻译条数与原文不一致，请重试")
         return {"items": [{"text": text, "translated": value} for text, value in zip(req.texts, values)]}
@@ -292,7 +307,7 @@ def selection_translate_texts(req: TextsTranslateReq):
 
 @app.post("/translate/stream")
 async def stream_translate(req: TranslateReq):
-    require_provider(req.provider)
+    require_provider(req.provider, **req.translation_options())
     pil, digest = decode_image(req)
     if not _slots.acquire(blocking=False):
         pil.close()
@@ -340,7 +355,7 @@ async def stream_translate(req: TranslateReq):
 
 @app.post("/translate")
 def do_translate(req: TranslateReq):
-    require_provider(req.provider)
+    require_provider(req.provider, **req.translation_options())
     pil, digest = decode_image(req)
     if not _slots.acquire(blocking=False):
         pil.close()

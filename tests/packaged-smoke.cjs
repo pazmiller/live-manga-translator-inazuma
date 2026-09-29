@@ -40,7 +40,9 @@ async function main(){
     assert.equal(await evaluate('typeof window.api.configuration'),'function');
     await evaluate("document.getElementById('clear').click()");await delay(200);
     assert.equal(await evaluate("document.getElementById('status').textContent"),'已清除');
-    assert(fs.existsSync(path.join(data,'settings.env.txt')));
+    assert(!fs.existsSync(path.join(data,'settings.env.txt')),'Fresh install does not create a manual credential file');
+    await evaluate("document.getElementById('configuration').click()");
+    await until(async()=>{const tabs=await(await fetch(`http://127.0.0.1:${debug}/json/list`)).json();return tabs.some(t=>t.url.endsWith('settings.html'));},'packaged AI settings');
     await evaluate("document.getElementById('quit').click()");
     assert.equal(await evaluate("document.getElementById('quit').textContent"),'退出?');
     ws.send(JSON.stringify({id:++next,method:'Runtime.evaluate',params:{expression:"document.getElementById('quit').click()"}}));

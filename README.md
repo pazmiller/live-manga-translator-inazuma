@@ -13,15 +13,16 @@ npm start
 
 已有环境直接运行 `npm start`。启动器会清除 `ELECTRON_RUN_AS_NODE`，Electron 自动启动本地 Python 服务，不必另开后端。首次使用某种 OCR 语言可能需要下载模型；默认预热日文。
 
-复制 `.env.example` 为 `.env` 并填写：
+启动后点击工具栏 **AI 设置**，选择 **OpenAI / Gemini / DeepSeek**、模型，粘贴对应服务商的 **API Key**，点击 **保存并使用**。API 地址会自动匹配，无需编辑文件；保存后下一次翻译立即使用新配置，无需重启。三家服务商的模型和密钥分别记忆，密钥输入框留空表示沿用已保存的密钥。
 
-- **DeepSeek**：`DEEPSEEK_API_KEY`，默认引擎，本轮已实网验证，支持逐条显示。
-- **Claude**：`ANTHROPIC_API_KEY`，识别后的气泡截图交给视觉模型；本轮没有 key，未实网验证。
-- **Google**：不需要 key，可能限流并降级 MyMemory，响应时间和质量较不稳定。
+模型预设覆盖 2026-06-29 至 2026-09-29 官方发布的近期文本模型，核对日期为 2026-09-29。选择 **手动输入模型名称…** 可使用未列出的模型。填写密钥后，**同步可用模型**会直接向所选服务商读取账户可用文本模型，不发送漫画或发起翻译；有创建日期时筛选近期模型，未提供日期的明确标注，不推断发布时间。同步成功不代表账户有每个模型的调用权限或额度。
 
-`.env` 不要公开。翻译引擎会接收选区中提取的文字；选择 Claude 时会发送气泡截图。
+模型资料：[OpenAI 更新记录](https://developers.openai.com/api/docs/changelog)、[Gemini 更新记录](https://ai.google.dev/gemini-api/docs/changelog)、[DeepSeek 更新记录](https://api-docs.deepseek.com/updates/)。预设和端点统一保存在 `backend/provider-catalog.json`；新的官方发布可通过同步或手动输入使用。
+
+密钥使用 Electron `safeStorage`（Windows DPAPI）加密，保存在应用用户数据目录的 `ai-settings.json`；不会向界面回填明文。旧开发版 `.env` / 旧安装版 `settings.env.txt` 可继续读取，在设置窗口保存时写入加密配置，原文件不会被修改或删除。`.env.example` 仅供开发者可选使用，普通用户不需要它。不要分享旧明文配置。OCR 本地运行，翻译服务会接收提取的文字。
 
 ## 使用
+
 
 在 `v1.0.0-mangaOCR` 开发分支，先点击 **翻译选区**；日文选区完成翻译后，按钮下方会出现 **加强 OCR**。点击后会用本地 Manga OCR 精读这次保存的截图中所有已找到、仍显示的气泡；原文有变化的气泡会批量重新翻译，全部成功后一起更新，失败则保留原有译文。它复用普通 OCR 找到的气泡位置，因此无法找回普通 OCR 完全漏掉的气泡。气泡“编辑”窗口的 **日漫精读** 仍可用于单条修正：它只把结果填入可编辑原文框，核对后再点“翻译并保存”。修改原文后，下方旧译文会标为“上次译文（原文已改，尚未重新翻译）”。仅支持日文；模型未安装或尚在后台载入时，点击会显示原因。当前安装包尚未包含这个可选模型。
 
@@ -66,7 +67,7 @@ npm run start
 
 Windows 安装版：运行 `dist/Inazuma-Setup-1.0.0-x64.exe`，安装后通过桌面 / 开始菜单的 **Inazuma** 启动。安装包包含 Python 运行时和本地 OCR 模型，无需安装 Node.js、Python 或手动启动后端。也可直接运行 `dist/win-unpacked/Inazuma.exe`，但必须保留整个 win-unpacked 文件夹。
 
-首次使用点击工具栏 **配置密钥**，在打开的文件中填写自己的 `DEEPSEEK_API_KEY`，保存并退出重启。安装版配置保存在 Electron 用户数据目录的 `settings.env.txt`，通过按钮即可打开，不会放在安装目录，也不会打包开发者 `.env`。配置文件是本地明文，请勿分享。OCR 本地运行，翻译仍需联网。当前测试包未作代码签名，Windows 可能提示未知发布者。
+新版源码通过工具栏 **AI 设置**配置服务商，无需创建 `.env`；构建白名单不包含开发者密钥。现有旧安装包仍是旧配置界面，需要重新构建才会包含本次更改。当前测试包未作代码签名，Windows 可能提示未知发布者。
 
 开发者构建 Windows x64 安装包（先完成 Python / npm 开发依赖安装）：
 
@@ -84,7 +85,7 @@ npm run test:packaged
 npm run validate
 ```
 
-依次运行基础测试、UI 功能与布局、Windows 原生输入、正常 GPU 响应性能测试。基础测试超时为 30 秒，每项 Electron 测试为 60 秒；失败或超时后继续其余项目，最终以非零退出码报告失败。日志和报告写入 `.qa/validation/`，总报告为 `latest.json`，每次运行覆盖该入口的上一次报告。运行中报告标为 `RUNNING`，不能当作通过。
+依次运行基础测试、UI 功能与布局、AI 设置与模型切换、Windows 原生输入、正常 GPU 响应性能测试。设置测试使用真实 Electron 窗口、preload、IPC 和系统加密，模拟服务商响应，覆盖三家切换、自定义模型、同步失败、留空保留密钥及保存后立即翻译；也可单独运行 `npm run test:settings`。基础测试超时为 30 秒，每项 Electron 测试为 60 秒；失败或超时后继续其余项目，最终以非零退出码报告失败。日志和报告写入 `.qa/validation/`，总报告为 `latest.json`，每次运行覆盖该入口的上一次报告。运行中报告标为 `RUNNING`，不能当作通过。
 
 实验折射单独运行 `npm run validate:glass`，报告位于 `.qa/validation/glass/latest.json`；它不能替代默认验证。请勿同时运行多个验证命令，以免窗口、GPU 负载和截图文件互相影响。
 

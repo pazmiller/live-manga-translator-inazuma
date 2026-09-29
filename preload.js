@@ -27,6 +27,7 @@ contextBridge.exposeInMainWorld("api", {
   getBounds: () => ipcRenderer.invoke("frame:getBounds"),
   quit: () => ipcRenderer.invoke("frame:quit"),
   configuration: () => ipcRenderer.invoke("frame:configuration"),
+  onConfigurationChanged: cb => ipcRenderer.on("settings:changed", (_e, data) => cb(data)),
   hitRegions: (regions) => ipcRenderer.send("win:hitRegions", regions),
   dragging: (active) => ipcRenderer.send("win:dragging", active),
   onStatus: (cb) => ipcRenderer.on("frame:status", (_e, data) => cb(data)),

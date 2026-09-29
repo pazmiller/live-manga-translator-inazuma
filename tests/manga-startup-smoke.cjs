@@ -26,7 +26,7 @@ app.whenReady().then(async()=>{
     await until(()=>frame.webContents.executeJavaScript('Boolean(window.api?.health)',true),'preload');
     const ready=await until(async()=>{
       const state=await health();
-      assert.equal(state.protocol,3);
+      assert.equal(state.protocol,4);
       if(state.manga_ocr_state==='error' || state.manga_ocr_state==='missing') throw new Error(`Manga OCR ${state.manga_ocr_state}`);
       return state.ocr==='ready' && state.manga_ocr_state==='ready' ? state : null;
     },'both OCR models to warm');

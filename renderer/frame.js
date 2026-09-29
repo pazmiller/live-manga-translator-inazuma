@@ -46,7 +46,7 @@ for (const [id, delta] of [['smaller', -.1], ['larger', .1]]) {
 }
 $('reveal').onclick = () => window.api.reveal();
 $('configuration').onclick = async () => {
-  try { await window.api.configuration(); status('填写密钥并保存后，请退出并重新启动应用'); }
+  try { await window.api.configuration(); }
   catch(error) { showError(error.message); }
 };
 window.api.onReveal(value => {
@@ -193,13 +193,28 @@ $('moveSelection').onclick = async () => {
   catch (error) { showError(error.message); }
 };
 
+let settingsLoaded = false;
+function applyConfiguration(settings) {
+  $('provider').value = settings.selectedProvider;
+  for (const option of $('provider').options) {
+    const config = settings.providers[option.value];
+    option.disabled = !config?.hasKey;
+    option.title = config?.hasKey ? config.model : '请在 翻译AI配置中填写密钥';
+  }
+  save();
+}
+window.api.onConfigurationChanged?.(settings => {
+  settingsLoaded = true; applyConfiguration(settings); hideError();
+  status(`已切换 ${settings.providers[settings.selectedProvider].name} · ${settings.providers[settings.selectedProvider].model}`);
+});
 function updateHealth(data) {
+  if(data.settings && !settingsLoaded) {settingsLoaded = true;applyConfiguration(data.settings);}
   if (!busy && !hasTranslated) status(data.ocr === 'loading' ? '普通 OCR 预热中，可开始框选'
     : data.manga_ocr_state === 'loading' ? '日漫精读后台载入中，可开始翻译'
-    : '框选漫画后开始翻译');
+    : Object.values(data.providers).some(Boolean) ? '框选漫画后开始翻译' : '先打开 翻译AI配置，连接翻译服务');
   for (const option of $('provider').options) {
     option.disabled = !data.providers[option.value];
-    option.title = option.disabled ? '此引擎尚未配置' : '';
+    option.title = option.disabled ? '请在 翻译AI配置中填写密钥' : data.settings?.providers[option.value]?.model || '';
   }
   if ($('provider').selectedOptions[0]?.disabled) {
     const available = [...$('provider').options].find(option => !option.disabled);

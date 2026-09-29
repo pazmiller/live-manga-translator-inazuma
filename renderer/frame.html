@@ -18,7 +18,7 @@
       <h1>译窗</h1><span class="heading-hint">拖动工具栏 · 四角调整选区</span>
       <span class="drag-handle" aria-hidden="true">⠿</span>
       <button id="moveSelection" class="text-button" title="将选区移回当前屏幕">选区归位</button>
-      <button id="configuration" class="text-button" title="填写翻译密钥，保存后重启应用">配置密钥</button>
+      <button id="configuration" title="翻译AI配置：选择服务商、模型和 API Key"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 2v12M8 2v12M13 2v12"/><path d="M1 5h4M6 11h4M11 6h4"/></svg>翻译AI配置</button>
       <button id="quit" class="icon-button" aria-label="退出应用" title="退出应用">×</button>
     </header>
 
@@ -40,8 +40,8 @@
       </div>
       <select id="provider" aria-label="翻译引擎" title="翻译引擎">
         <option value="deepseek">DeepSeek</option>
-        <option value="google">Google</option>
-        <option value="claude">Claude</option>
+        <option value="openai">OpenAI</option>
+        <option value="gemini">Gemini</option>
       </select>
       <span class="spacer"></span>
       <div class="translate-actions"><button id="lock" class="primary" title="翻译选区 · Ctrl+Shift+T"><svg viewBox="0 0 16 16" aria-hidden="true">

@@ -13,6 +13,8 @@ fs.mkdirSync(output, {recursive:true});
 app.setPath('userData', path.join(output, 'glass-app-tests'));
 app.disableHardwareAcceleration();
 process.env.MWT_BACKEND_PORT = '18769';
+process.env.MWT_ENV_FILE = path.join(output, 'glass-app-no-env');
+process.env.DEEPSEEK_API_KEY = 'test-glass-app-key';
 process.env.MWT_GLASS_CAPTURE = '1'; // Explicitly test the experimental optics path.
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const ignoreStates = new Map(), frames = new Map(), images = new Map();
@@ -82,7 +84,7 @@ childProcess.spawn = () => { spawns++; throw new Error('Python must never start 
 global.fetch = async (url, options = {}) => {
   const endpoint = new URL(url).pathname;
   requests.push(endpoint);
-  if (endpoint === '/health') return Response.json({service:'manga-window-translator', protocol:3,
+  if (endpoint === '/health') return Response.json({service:'manga-window-translator', protocol:4,
     ocr:'ready', providers:{deepseek:true, google:true, claude:false}});
   assert.equal(endpoint, '/translate/stream', `Unexpected request: ${endpoint}`);
   if (streamMode === 'pending') return new Promise((_resolve, reject) => {

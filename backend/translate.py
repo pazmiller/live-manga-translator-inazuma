@@ -5,8 +5,25 @@ import os
 import re
 import time
 import threading
+import hashlib
 from collections import OrderedDict
 from functools import lru_cache
+from pathlib import Path
+
+PROVIDERS = json.loads(Path(__file__).with_name('provider-catalog.json').read_text(encoding='utf-8'))['providers']
+
+
+def provider_config(provider, config=None):
+    definition = PROVIDERS[provider]
+    config = config or {}
+    return {"api_key": config.get("api_key") or os.getenv(definition['keyEnv'], ''),
+            "model": config.get("model") or os.getenv(definition['modelEnv']) or definition['defaultModel']}
+
+
+@lru_cache(maxsize=6)
+def _llm_client(provider, api_key):
+    from openai import OpenAI
+    return OpenAI(api_key=api_key, base_url=PROVIDERS[provider]['baseUrl'], timeout=45, max_retries=0)
 
 LANG_NAMES = {
     "ja": "Japanese", "en": "English", "zh": "Chinese", "ko": "Korean",
@@ -125,7 +142,12 @@ class ArrayStream:
 
 
 def _deepseek_stream(texts, source, target):
-    client = _deepseek_client()
+    yield from _llm_stream(texts, source, target, "deepseek")
+
+
+def _llm_stream(texts, source, target, provider, config=None):
+    options = provider_config(provider, config)
+    client = _deepseek_client() if provider == "deepseek" and config is None else _llm_client(provider, options['api_key'])
 
     numbered = json.dumps([{"index": i, "source": text} for i, text in enumerate(texts)], ensure_ascii=False)
     prompt = (
@@ -136,11 +158,18 @@ def _deepseek_stream(texts, source, target):
         '{"index":0,"source":"exact input source","translation":"translated text"}:\n\n'
         f"{numbered}"
     )
+    parameters = {}
+    if provider == 'openai' and options['model'].startswith(('gpt-6-', 'gpt-5.6-')):
+        parameters['reasoning_effort'] = 'low'
+    elif provider == 'gemini' and options['model'].startswith('gemini-3.'):
+        parameters['reasoning_effort'] = 'low'
+    elif provider == 'deepseek' and options['model'] in ('deepseek-flash', 'deepseek-v4-pro', 'deepseek-v4-flash'):
+        parameters['extra_body'] = {'thinking': {'type': 'disabled'}}
     resp = client.chat.completions.create(
-        model=os.environ.get("DEEPSEEK_MODEL", "deepseek-chat"),
+        model=options['model'],
         messages=[{"role": "user", "content": prompt}],
-        temperature=0.3,
         stream=True,
+        **parameters,
     )
     parser = ArrayStream(dict)
     emitted = 0
@@ -187,7 +216,7 @@ def _claude_response(content):
     return "".join(b.text for b in resp.content if b.type == "text")
 
 
-def translate_text(text, source, target, provider):
+def translate_text(text, source, target, provider, config=None):
     """Translate edited source text; even Claude must not reread an image."""
     if provider == "claude":
         raw = _claude_response([{"type": "text", "text": (
@@ -199,8 +228,10 @@ def translate_text(text, source, target, provider):
         parser = ArrayStream()
         values = parser.feed(raw)
         parser.finish(1)
-    elif provider == "deepseek":
+    elif provider == "deepseek" and config is None:
         values = translate_deepseek([text], source, target)
+    elif provider in PROVIDERS:
+        values = list(_llm_stream([text], source, target, provider, config))
     else:
         values = translate_free([text], source, target)
     if not isinstance(values, list) or len(values) != 1 or not isinstance(values[0], str) or not values[0].strip():
@@ -242,7 +273,7 @@ _cache = OrderedDict()
 _cache_lock = threading.Lock()
 
 
-def translated_bubbles(bubbles, pil, source, target, provider, cancelled):
+def translated_bubbles(bubbles, pil, source, target, provider, cancelled, config=None):
     """Yield completed bubbles immediately. Cache text, never screenshots."""
     if provider == "claude":
         crops = [pil.crop((max(0,int(b["x"])-4), max(0,int(b["y"])-4),
@@ -252,12 +283,14 @@ def translated_bubbles(bubbles, pil, source, target, provider, cancelled):
                 return
             yield {**b, **result, "cached": False}
         return
-    model = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat") if provider == "deepseek" else "google"
+    options = provider_config(provider, config) if provider in PROVIDERS else {}
+    model = options.get('model', provider)
+    credential_id = hashlib.sha256(options.get('api_key', '').encode()).hexdigest()
     # Keep adjacent dialogue as context for the model and for the cache key.
     context = tuple(b["text"] for b in bubbles)
     missing = []
     for i, b in enumerate(bubbles):
-        key = (provider, model, source, target, context, i)
+        key = (provider, model, credential_id, source, target, context, i)
         with _cache_lock:
             value = _cache.get(key)
             if value is not None:
@@ -270,7 +303,12 @@ def translated_bubbles(bubbles, pil, source, target, provider, cancelled):
         return
     # A retry must never send already completed bubbles back to the provider.
     texts = [b["text"] for b, _ in missing]
-    stream = _deepseek_stream(texts, source, target) if provider == "deepseek" else iter(translate_free(texts, source, target))
+    if provider == 'deepseek' and config is None:
+        stream = _deepseek_stream(texts, source, target)
+    elif provider in PROVIDERS:
+        stream = _llm_stream(texts, source, target, provider, config)
+    else:
+        stream = iter(translate_free(texts, source, target))
     pending_cache = {}
     completed = 0
     try:

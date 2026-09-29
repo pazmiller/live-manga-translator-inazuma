@@ -99,7 +99,7 @@ app.whenReady().then(async()=>{
     frame.showInactive();
     await evaluate(`document.getElementById('provider').value='deepseek'`);
     const health=await evaluate(`window.api.health()`);
-    assert.equal(health.protocol,3);assert(health.providers.deepseek,'Live smoke needs configured DeepSeek key');
+    assert.equal(health.protocol,4);assert(health.providers.deepseek,'Live smoke needs configured DeepSeek key');
 
     async function translateSelection({cut=false}={}) {
       const before=requests.length;interruptNext=cut;
