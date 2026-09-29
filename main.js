@@ -1,5 +1,7 @@
 const {app, BrowserWindow, ipcMain, desktopCapturer, screen, globalShortcut, nativeImage, safeStorage} = require('electron');
 const path = require('path');
+const {createSecurity,webPreferences} = require('./electron-security.cjs');
+const security = createSecurity(ipcMain);
 const os = require('os');
 const {createBackendService} = require('./backend-service.cjs');
 const {AUTH_ERROR} = require('./backend-client.cjs');
@@ -69,16 +71,18 @@ function createWindows() {
   frameWin=new BrowserWindow({x:work.x+24,y:work.y+24,width:680,height:220,
     show:!app.commandLine.hasSwitch('smoke-test'),
     transparent:true,frame:false,alwaysOnTop:true,hasShadow:false,resizable:false,
-    webPreferences:{preload:path.join(__dirname,'preload.js'),contextIsolation:true}});
+    webPreferences:{preload:path.join(__dirname,'preload.js'),...webPreferences}});
   trackMouse(frameWin);frameWin.setAlwaysOnTop(true,'screen-saver');
+  security.protectWindow(frameWin,'toolbar',path.join(__dirname,'renderer/frame.html'));
   frameWin.loadFile(path.join(__dirname,'renderer/frame.html'));
   frameWin.on('closed',()=>{frameWin=null;app.quit();});
   selectionWin=new BrowserWindow({x:work.x+70,y:work.y+260,width:620,height:Math.max(MIN_SIZE,Math.min(640,work.height-280)),
     show:!app.commandLine.hasSwitch('smoke-test'),
     minWidth:MIN_SIZE,minHeight:MIN_SIZE,transparent:true,frame:false,alwaysOnTop:true,
     hasShadow:false,resizable:false,skipTaskbar:true,
-    webPreferences:{preload:path.join(__dirname,'preload.js'),contextIsolation:true}});
+    webPreferences:{preload:path.join(__dirname,'preload.js'),...webPreferences}});
   trackMouse(selectionWin);selectionWin.setAlwaysOnTop(true,'screen-saver');
+  security.protectWindow(selectionWin,'selection',path.join(__dirname,'renderer/selection.html'));
   selectionWin.loadFile(path.join(__dirname,'renderer/selection.html')).then(selectionState);
   const changed=()=>{
     selectionState();
@@ -94,8 +98,9 @@ function getOverlay(display) {
   if(overlays.has(key)) return overlays.get(key);
   const win=new BrowserWindow({...display.bounds,transparent:true,frame:false,alwaysOnTop:true,
     hasShadow:false,resizable:false,movable:false,skipTaskbar:true,show:false,
-    webPreferences:{preload:path.join(__dirname,'preload.js'),contextIsolation:true}});
+    webPreferences:{preload:path.join(__dirname,'preload.js'),...webPreferences}});
   trackMouse(win);win.setAlwaysOnTop(true,'screen-saver');win.setIgnoreMouseEvents(true,{forward:true});
+  security.protectWindow(win,'overlay',path.join(__dirname,'renderer/overlay.html'));
   win.loadFile(path.join(__dirname,'renderer/overlay.html')).then(()=>{send(win,'overlay:preferences',preferences);win.showInactive();});
   win.on('closed',()=>overlays.delete(key));overlays.set(key,win);return win;
 }
@@ -385,35 +390,34 @@ function setReadingMode(value) {
   return {mode:readingMode};
 }
 
-ipcMain.handle('frame:lock',(_e,opts)=>runLock(opts));
-ipcMain.handle('frame:retry',()=>runLock(null,true));ipcMain.handle('frame:restore',restorePrevious);
-ipcMain.handle('frame:enhance',enhanceSelection);
-ipcMain.handle('frame:cancel',cancelJob);ipcMain.handle('frame:clear',clearAll);ipcMain.handle('frame:health',()=>waitForBackend());
+security.handle('frame:lock',(_e,opts)=>runLock(opts));
+security.handle('frame:retry',()=>runLock(null,true));security.handle('frame:restore',restorePrevious);
+security.handle('frame:enhance',enhanceSelection);
+security.handle('frame:cancel',cancelJob);security.handle('frame:clear',clearAll);security.handle('frame:health',()=>waitForBackend());
 function toggleReveal() {reveal=!reveal;broadcast('overlay:reveal',reveal);send(frameWin,'frame:reveal',reveal);return reveal;}
-ipcMain.handle('frame:reveal',toggleReveal);ipcMain.handle('frame:readingMode',(_e,value)=>setReadingMode(value));
-ipcMain.on('frame:preferences',(_e,prefs)=>{preferences=prefs;broadcast('overlay:preferences',prefs);send(selectionWin,'overlay:preferences',prefs);});
-ipcMain.on('frame:interact',(_e,value)=>{interactionLocked=Boolean(value);});
-ipcMain.handle('frame:getBounds',()=>selectionWin.getBounds());ipcMain.handle('frame:quit',()=>app.quit());
-ipcMain.handle('frame:configuration',()=>{
+security.handle('frame:reveal',toggleReveal);security.handle('frame:readingMode',(_e,value)=>setReadingMode(value));
+security.on('frame:preferences',(_e,prefs)=>{preferences=prefs;broadcast('overlay:preferences',prefs);send(selectionWin,'overlay:preferences',prefs);});
+security.on('frame:interact',(_e,value)=>{interactionLocked=Boolean(value);});
+security.handle('frame:getBounds',()=>selectionWin.getBounds());security.handle('frame:quit',()=>app.quit());
+security.handle('frame:configuration',()=>{
   if(settingsWin && !settingsWin.isDestroyed()) {settingsWin.show();settingsWin.focus();return;}
   if(editorWin) throw new Error('请先关闭单条编辑，再打开 翻译AI配置');
   const work=screen.getDisplayMatching(frameWin.getBounds()).workArea;
   settingsWin=new BrowserWindow({width:Math.min(620,work.width),height:Math.min(740,work.height),
     parent:frameWin,modal:true,show:false,frame:false,resizable:false,autoHideMenuBar:true,
     backgroundColor:'#f2f5fb',title:'翻译AI配置 · Inazuma',
-    webPreferences:{preload:path.join(__dirname,'settings-preload.cjs'),contextIsolation:true,sandbox:true}});
+    webPreferences:{preload:path.join(__dirname,'settings-preload.cjs'),...webPreferences}});
   settingsWin.setAlwaysOnTop(true,'screen-saver');
-  settingsWin.webContents.setWindowOpenHandler(()=>({action:'deny'}));
-  settingsWin.webContents.on('will-navigate',event=>event.preventDefault());
   settingsWin.once('ready-to-show',()=>{if(settingsWin && !app.commandLine.hasSwitch('smoke-test')) settingsWin.show();});
   settingsWin.on('closed',()=>{settingsWin=null;});
+  security.protectWindow(settingsWin,'settings',path.join(__dirname,'renderer/settings.html'));
   settingsWin.loadFile(path.join(__dirname,'renderer/settings.html'));
 });
 function settingsSender(event) {
   if(!settingsWin || event.sender!==settingsWin.webContents) throw new Error('设置窗口已关闭，请重新打开');
 }
-ipcMain.handle('settings:load',event=>{settingsSender(event);return settingsStore.summary();});
-ipcMain.handle('settings:save',(event,data)=>{
+security.handle('settings:load',event=>{settingsSender(event);return settingsStore.summary();});
+security.handle('settings:save',(event,data)=>{
   settingsSender(event);
   if(activeJob || bubbleTask) return {error:'请等待当前翻译完成，或取消翻译后再保存设置'};
   try {
@@ -422,40 +426,40 @@ ipcMain.handle('settings:save',(event,data)=>{
     return {settings};
   } catch(error) {return {error:error.message};}
 });
-ipcMain.handle('settings:models',async(event,data)=>{
+security.handle('settings:models',async(event,data)=>{
   settingsSender(event);
   try {return await settingsStore.syncModels(data);} catch(error) {return {error:error.message};}
 });
-ipcMain.handle('settings:close',event=>{settingsSender(event);settingsWin.close();});
-ipcMain.on('frame:height',(_e,value)=>{
+security.handle('settings:close',event=>{settingsSender(event);settingsWin.close();});
+security.on('frame:height',(_e,value)=>{
   if(!frameWin || !Number.isFinite(value)) return;
   const b=frameWin.getBounds(),work=screen.getDisplayMatching(b).workArea,height=Math.max(150,Math.min(Math.ceil(value),work.height));
   frameWin.setBounds({x:Math.max(work.x,Math.min(b.x,work.x+work.width-b.width)),y:Math.max(work.y,Math.min(b.y,work.y+work.height-height)),width:b.width,height});
 });
-ipcMain.handle('frame:recenter',()=>{
+security.handle('frame:recenter',()=>{
   const p=screen.getCursorScreenPoint(),work=screen.getDisplayNearestPoint(p).workArea,b=selectionWin.getBounds(),width=Math.min(b.width,work.width),height=Math.min(b.height,work.height);
   selectionWin.setBounds({x:Math.round(Math.max(work.x,Math.min(p.x-width/2,work.x+work.width-width))),y:Math.round(Math.max(work.y,Math.min(p.y-height/2,work.y+work.height-height))),width,height});
 });
-ipcMain.handle('frame:resizeTo',(_e,x,y,w,h,anchor='se')=>{
+security.handle('frame:resizeTo',(_e,x,y,w,h,anchor='se')=>{
   if(![x,y,w,h].every(Number.isFinite)) return;
   const work=screen.getDisplayMatching(selectionWin.getBounds()).workArea,width=Math.round(Math.max(MIN_SIZE,Math.min(w,work.width))),height=Math.round(Math.max(MIN_SIZE,Math.min(h,work.height)));
   if(anchor.includes('w')) x+=w-width;if(anchor.includes('n')) y+=h-height;
   selectionWin.setBounds({x:Math.round(x),y:Math.round(y),width,height});
 });
-ipcMain.handle('bubble:inspect',(_e,key)=>{
+security.handle('bubble:inspect',(_e,key)=>{
   try {const {entry,context}=bubbleEntry(key);return {text:entry.bubble.text,translated:entry.bubble.translated,image:bubbleCrop(entry,context).toDataURL(),...context.opts};}
   catch(error) {return {error:error.message};}
 });
-ipcMain.handle('bubble:ocr',(_e,key)=>bubbleAction(key,'ocr'));ipcMain.handle('bubble:manga-ocr',(_e,key)=>bubbleAction(key,'manga-ocr'));ipcMain.handle('bubble:translate',(_e,data)=>bubbleAction(data.key,'translate',data.text));
-ipcMain.on('bubble:dismiss',(_e,key)=>{results.delete(key);recoveryState();});
-ipcMain.on('overlay:editor',(event,value)=>{
+security.handle('bubble:ocr',(_e,key)=>bubbleAction(key,'ocr'));security.handle('bubble:manga-ocr',(_e,key)=>bubbleAction(key,'manga-ocr'));security.handle('bubble:translate',(_e,data)=>bubbleAction(data.key,'translate',data.text));
+security.on('bubble:dismiss',(_e,key)=>{results.delete(key);recoveryState();});
+security.on('overlay:editor',(event,value)=>{
   const win=BrowserWindow.fromWebContents(event.sender);
   if(value) {editorWin=win;win.setIgnoreMouseEvents(false);win.focus();}
   else if(editorWin===win) {editorWin=null;bubbleTask?.abort();}
 });
-ipcMain.on('win:hitRegions',(event,regions)=>{const state=mouseStates.get(BrowserWindow.fromWebContents(event.sender));if(state) state.regions=regions.slice(0,400);});
-ipcMain.on('win:dragging',(event,value)=>{const state=mouseStates.get(BrowserWindow.fromWebContents(event.sender));if(state) state.dragging=Boolean(value);});
-ipcMain.on('glass:regions',(event,regions)=>glassCapture.regions(BrowserWindow.fromWebContents(event.sender),regions));
+security.on('win:hitRegions',(event,regions)=>{const state=mouseStates.get(BrowserWindow.fromWebContents(event.sender));if(state) state.regions=regions.slice(0,400);});
+security.on('win:dragging',(event,value)=>{const state=mouseStates.get(BrowserWindow.fromWebContents(event.sender));if(state) state.dragging=Boolean(value);});
+security.on('glass:regions',(event,regions)=>glassCapture.regions(BrowserWindow.fromWebContents(event.sender),regions));
 function updateMouse() {
   if(settingsWin && !settingsWin.isDestroyed()) {
     for(const [win,state] of mouseStates) if(!state.ignore) {win.setIgnoreMouseEvents(true,{forward:true});state.ignore=true;}

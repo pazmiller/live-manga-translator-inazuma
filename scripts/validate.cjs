@@ -81,6 +81,7 @@ async function main() {
     ui('ui', 'UI 功能与布局', 'renderer-smoke.cjs'),
     ui('settings', 'AI 设置与模型切换', 'settings-ui.cjs'),
     ui('auth-ui', '认证后翻译与编辑流程', 'backend-auth-ui.cjs'),
+    ui('security', 'Electron 窗口与 IPC 安全', 'electron-security-ui.cjs'),
     ui('input', 'Windows 原生输入', 'toolbar-input.cjs'),
     ui('responsive', '正常 GPU 响应性能', 'glass-responsive.cjs'),
   ];
