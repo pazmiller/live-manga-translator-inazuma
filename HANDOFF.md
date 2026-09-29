@@ -1,3 +1,57 @@
+## 2026-09-29 移动选区导致工具栏变宽 / 系统截图缺少 UI
+
+在 125% Windows 缩放下复现：原生移动工具栏到非整数 DIP 像素位置后，再反复移动翻译选区，selection change → recoveryState → renderer reportLayout → frame:height，把 getBounds 向外取整后的宽度写回，工具栏从 680 累积至 793。`frame:height` 现在使用固定 TOOLBAR_WIDTH=680，尺寸相差不超过 1 DIP 时不重设 bounds，消除反馈；同一复现保持 680/681。独立 AI 配置窗口在此场景中尺寸保持不变。调试复现脚本保留于忽略目录 `.qa/bounds-*.cjs`。
+
+截图 UI 缺失来自之前 trackMouse 永久 setContentProtection(true)，与新 CSP/IPC 保护无关。默认不再永久排除窗口；连续阅读的预览采样才短暂设置排除并 finally 恢复，普通翻译仍沿用隐藏 → 截图 → finally 显示。仅显式实验 MWT_GLASS_CAPTURE=1 保留永久排除以避免光学镜像。采样期间系统截图仍可能碰到短暂排除时段。
+
+新增 window-lifecycle.cjs 与 native-window-state.ps1：真实 Windows SWP_NOSIZE 移动窗口，验证工具栏无累积变化、独立配置窗口不变、GetWindowDisplayAffinity 的初始/失败后状态、watch 采样排除和普通翻译失败后显示恢复。纳入 validate。renderer-smoke 的独立窗口明确 x/y=24、transparent=true、resizable=false，与应用一致；原不透明且可缩放的测试窗口在当前 125% 缩放下返回 682 宽，对齐配置后通过，未放宽宽度断言。此次没有重新打包或提交。
+
+最终 `npm run validate` 全部 9 阶段 PASS，报告 `.qa/validation/latest.json`。原生移动回归为 680×200 → 681×201 DIP（像素取整，无累积增长），配置窗口保持不变，截图排除标记成功恢复。未人工运行 Snipping Tool，未覆盖混合 DPI 多屏或实验截图折射；真实 Windows 截图排除标记和受控捕获失败路径已验证。本轮改动及直接调用点冗余审查完成，无新增安全清理提案。
+
+## 2026-09-29 Electron 窗口与 IPC 保护
+
+新增 `electron-security.cjs`，四类窗口明确开启 sandbox/contextIsolation/webSecurity，关闭 Node integration、webview 和不安全内容。窗口加载前登记角色和精确文件 URL；全部 IPC 经统一策略表验证注册窗口、主 frame、URL、角色及参数类型/长度/坐标范围。未知策略不能注册，非法 invoke 拒绝，非法 send 丢弃。每个 session 拒绝 renderer 权限申请，截图仍由主进程执行。全部窗口阻止导航、重定向、弹窗及 webview 附加。
+
+四个 HTML 均配置 CSP：只允许本地脚本，禁止内联脚本、eval、renderer 网络请求、iframe、object 和表单提交。气泡/选区/工具栏保留动态内联样式以支持布局和玻璃效果；设置窗口保留更严格的 style-src self。翻译和模型同步仍经主进程，不受 connect-src none 影响。两种构建都会包含新增安全模块。尚未改成自定义资源协议或配置发行版 fuses，不能据此宣称已消除全部安全风险。
+
+验证：`npm run validate` 全部 8 阶段通过，包括 29 项 Node、48 项 Python、UI/设置/真实认证流程/安全拦截/原生输入/GPU 响应。安全测试实际启动 Electron，验证错误角色、相同页面但未登记窗口、内联脚本、外网请求、通知权限、弹窗及导航拒绝；单元测试补充子 frame、错误 URL、畸形参数和关闭窗口。响应测试 35 次调整尺寸，主进程心跳最大延迟 16 ms；这不是所有电脑上的性能保证。翻译端到端使用固定 OCR/provider 数据，无付费调用。未重建 dist 安装包、未提交。
+
+冗余审查：本轮修改文件与 preload/renderer/build 调用点已检查。唯一清理提案：`main.js` 的 `settingsSender` 与统一 IPC 来源保护重复，未来可移除该函数及四处调用，以减少维护；须重跑 settings-ui 和安全来源测试。风险为失去专用“窗口已关闭”错误提示，因此本轮保留，未擅自清理。HTML 的 CSP 重复是 file 页面独立生效所需，保留。
+
+## 2026-09-29 本地后端身份验证与接口认证
+
+新增 `backend-client.cjs`、`backend-service.cjs`、`backend/local_auth.py`。每次应用启动生成 32-byte 随机秘密，经 Python stdin 管道传递；不经 argv/env/文件/renderer。开发与安装模式都默认随机端口并启动自己的 worker；不再凭旧 `/health` 复用已有服务。每条新连接先校验随机挑战的 HMAC，再限定同一 socket 发送业务请求；避免验证后自动重连时把 API Key 发给替换服务。所有业务接口验证派生的 client token，验证在读取请求体前执行；浏览器 Origin 请求拒绝，未配置密钥的 app 默认 503。主进程所有整页/单泡/加强 OCR 调用统一走认证客户端，错误中英文可显示。没有增加用户配置或登录。
+
+测试：新增 Node 假后端、跨会话、替换连接、流式及取消测试；Python 覆盖全部接口、挑战与 request body 前置拒绝；`backend-auth-ui.cjs` 使用真实 Electron/Python/管道/HTTP，固定 OCR 和翻译数据验证按钮翻译、流式气泡、编辑保存、加强 OCR 和清除。`node tests/backend-auth-live.cjs` 验证实际 RapidOCR 和 401 拒绝，识别 66 字符，10 次认证 health 均值 3.3 ms（包含本地 HTTP，不是纯加密耗时）。两种 OCR 的实际离线预热测试通过。付费翻译未调用。
+
+`npm run validate` 已加入 Python 回归与真实认证 UI 流程；旧 UI 单测用显式 service mock，生产代码无测试免认证开关。原生输入测试 PowerShell 增加 DPI awareness，修复物理坐标被虚拟化导致标题命中错误；窗口宽度断言容许 Windows 一 DIP 的取整误差。`benchmark.py` 与成品测试均适配认证；成品测试先单独验证自己启动的 bundled worker，再通过应用 IPC 验证应用自己的 worker，不读取应用会话密钥。
+
+最终 `npm run validate` 全部 7 个阶段 PASS（28 项 Node、48 项 Python，以及布局、设置、认证 UI、原生输入、GPU 响应验证），报告 `.qa/validation/latest.json`。`git diff --check` 和新增 Python 脚本语法检查通过。认证相关新增/修改文件及调用点已做冗余检查，无安全清理提案。成品测试本轮只完成代码适配和语法检查，未对旧 EXE 运行或宣称通过。
+
+打包配置已包含两个新增 Node 模块，Python 静态导入会收集 local_auth。本轮没有重建 `dist/` 的两个 1.1.0 EXE，因此下面旧安装包的测试和 hash 不代表已包含本保护；发布前必须重新构建并运行成品测试。此前安全审查的依赖升级、Electron 窗口/CSP/IPC 加固和代码签名仍是单独待办。
+
+---
+
+## 2026-09-29 Windows 1.1.0 MangaOCR 完整版
+
+新增 `npm run dist:win:manga`，生成 `dist/mangaocr/Inazuma-MangaOCR-Setup-1.1.0-x64.exe`，784448940 bytes（约 748 MiB），展开约 1.72 GiB。标准版文件 SHA256 保持不变。完整版 appId 后缀 `.mangaocr`，产品名 Inazuma MangaOCR；内置 PyInstaller 独立 Manga OCR worker、Python 3.10、torch 2.6.0+cpu、transformers 4.57.6、manga-ocr 0.1.16、fugashi/unidic-lite 和固定模型快照 aa6573bd10b0d446cbf622e29c3e084914df9741。无需用户安装 Python 或联网下载模型。CPU 模式强制启用，翻译 API 仍联网。
+
+打包后 server 从 resources/manga-ocr 查找独立 exe；开发版继续使用原虚拟环境和脚本。MangaWorker 允许 script=None 直接运行 exe。冻结 worker 在导入 transformers 前设置 HF_HUB_OFFLINE/TRANSFORMERS_OFFLINE，并只加载内置模型路径。标准版无 bundled worker 时仍显示模型未安装。`scripts/build-manga.py` 本地离线读取固定快照并收集动态导入；首次构建需提前缓存该快照，详见 README。
+
+42 项 Python 回归通过。实际静默安装至 `.qa/installed-mangaocr-1.1.0` 后运行成品测试，通过空缓存/离线/no Python PATH 下 Manga OCR 两次识别（包含预期“一緒に行こう”），预热后 199 / 160 ms；普通四种 OCR、三家配置 IPC、中英文切换、退出及后端清理通过。成品无开发者密钥，测试安装已卸载。证据 `.qa/installed-smoke-1hDA1o`，未安装目录成品证据 `.qa/installed-smoke-NKwLFn`。未调用真实付费 API，未做干净 Windows VM 验证。
+
+SHA256 `a4ab030c8529ffc3bede63c2c824b571b8ff85ffe1b90e14c0d833e19175a3ea`，同目录 `.sha256` 文件。已核对 GitHub 官方 Release 单文件小于 2 GiB 限制，当前安装包可直接上传，无需分卷。未上传 Release，未 commit/tag/push 本轮打包改动。
+
+---
+
+## 2026-09-29 Windows 1.1.0 标准安装包
+
+`package.json` 和 lockfile 版本更新为 1.1.0，无自动 tag/commit/push。生成 `dist/Inazuma-Setup-1.1.0-x64.exe`（224884011 bytes，约 214 MiB），同目录提供 SHA256 文件；旧 1.0.0 安装包保留。修复 PyInstaller `--specpath .build` 导致 provider-catalog.json 相对路径错误：`--add-data` 改用仓库绝对路径。安装版包含三家 AI 配置与中英文界面，标准包不内置可选 Manga OCR 环境/模型。
+
+实际静默安装至项目专用 `.qa/installed-inazuma-1.1.0`，运行 `node tests/packaged-smoke.cjs .qa/installed-inazuma-1.1.0/Inazuma.exe` 通过：PATH 只保留 System32，内置日文 OCR 返回 66 字，英/中/韩引擎调用成功，protocol 4、全部 provider 初始无密钥、清除、语言切换、设置窗口真实 preload/IPC 返回三家目录、退出和后端结束均验证。无付费翻译调用；这些样本仅证明各 OCR 引擎可运行，不代表全部语言准确率。证据 `.qa/installed-smoke-dKnC5I`。asar 版本 1.1.0 且不含 .env / ai-settings.json / settings.env.txt。安装包未签名，未做干净 Windows VM 或实体多屏测试。
+
+---
+
 ## 2026-09-29 中英文界面切换
 
 工具栏和设置窗口新增 EN / 中文按钮，同步切换现有窗口并记忆下次启动的语言。共用 `renderer/i18n.js`：明确限定系统 UI 区域，按词典与动态数字模式本地化文本及 title/aria-label/placeholder，WeakMap 保留原中文以便还原；只处理 DOM 变化，不轮询、不发出翻译请求。localStorage `inazuma-ui-language` 持久化，storage 事件同步其他窗口。漫画 `.copy`、编辑器译文/原文值、模型输入、密钥值不本地化。新增界面文案需同时维护词典，未知文案保留原文；服务商原始英文错误不额外改写。
