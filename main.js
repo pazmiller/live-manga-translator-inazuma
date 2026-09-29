@@ -11,7 +11,7 @@ const {makeGlassCapture} = require('./glass-capture');
 const {createSettingsStore} = require('./settings-store.cjs');
 
 let BACKEND_PORT = Number(process.env.MWT_BACKEND_PORT || 8765);
-const BORDER = 6, MIN_SIZE = 64;
+const BORDER = 6, MIN_SIZE = 64, TOOLBAR_WIDTH = 680;
 const windowsBuild = Number(os.release().split('.')[2]);
 const supportsWatch = process.platform === 'win32' && windowsBuild >= 19041;
 // getSources is a screenshot API, not a low-latency video feed. On Windows it
@@ -51,8 +51,8 @@ function broadcast(channel,payload) {for(const win of overlays.values()) send(wi
 function trackMouse(win) {
   mouseStates.set(win,{regions:[],dragging:false,ignore:null,motion:null});
   win.on('closed',()=>{mouseStates.delete(win);if(editorWin===win) editorWin=null;});
-  // Keep our controls out of the local optical feed to prevent mirror feedback.
-  if(supportsWatch) win.setContentProtection(true);
+  // Only the opt-in continuous optical feed needs permanent capture exclusion.
+  if(supportsWatch && experimentalGlassCapture) win.setContentProtection(true);
   glassCapture.register(win);
 }
 function selectionState() {
@@ -68,7 +68,7 @@ function readingStatus(state,text) {
 }
 function createWindows() {
   const work=screen.getPrimaryDisplay().workArea;
-  frameWin=new BrowserWindow({x:work.x+24,y:work.y+24,width:680,height:220,
+  frameWin=new BrowserWindow({x:work.x+24,y:work.y+24,width:TOOLBAR_WIDTH,height:220,
     show:!app.commandLine.hasSwitch('smoke-test'),
     transparent:true,frame:false,alwaysOnTop:true,hasShadow:false,resizable:false,
     webPreferences:{preload:path.join(__dirname,'preload.js'),...webPreferences}});
@@ -108,7 +108,17 @@ async function captureRegion(selected,preview=false) {
   const display=screen.getDisplayMatching(selected),rect=intersect(selected,display.bounds);
   if(rect.width<8 || rect.height<8) throw new Error('选区在屏幕外，请重新框选');
   const width=preview?Math.min(1280,Math.round(display.size.width*display.scaleFactor)):Math.round(display.size.width*display.scaleFactor);
-  const sources=await desktopCapturer.getSources({types:['screen'],thumbnailSize:{width,height:Math.round(width*display.size.height/display.size.width)}});
+  // Watch sampling must see the manga beneath the overlays, but ordinary OS
+  // screenshots should include our UI. Restore exclusion even on capture failure.
+  const excluded=preview && supportsWatch ? [frameWin,selectionWin,settingsWin,...overlays.values()].filter(w=>w && !w.isDestroyed()) : [];
+  let sources;
+  try {
+    for(const win of excluded) win.setContentProtection(true);
+    if(excluded.length) await sleep(40);
+    sources=await desktopCapturer.getSources({types:['screen'],thumbnailSize:{width,height:Math.round(width*display.size.height/display.size.width)}});
+  } finally {
+    for(const win of excluded) if(!win.isDestroyed()) win.setContentProtection(experimentalGlassCapture && win!==settingsWin);
+  }
   const source=sources.find(s=>s.display_id===String(display.id));
   if(!source || source.thumbnail.isEmpty()) throw new Error('无法截取屏幕，请检查屏幕录制权限');
   const size=source.thumbnail.getSize(),scale=size.width/display.bounds.width;
@@ -434,7 +444,10 @@ security.handle('settings:close',event=>{settingsSender(event);settingsWin.close
 security.on('frame:height',(_e,value)=>{
   if(!frameWin || !Number.isFinite(value)) return;
   const b=frameWin.getBounds(),work=screen.getDisplayMatching(b).workArea,height=Math.max(150,Math.min(Math.ceil(value),work.height));
-  frameWin.setBounds({x:Math.max(work.x,Math.min(b.x,work.x+work.width-b.width)),y:Math.max(work.y,Math.min(b.y,work.y+work.height-height)),width:b.width,height});
+  // getBounds() encloses physical pixels in DIP; at 125% it may report +1.
+  // Never feed that rounded width back on each selection-state update.
+  if(Math.abs(b.width-TOOLBAR_WIDTH)<=1 && Math.abs(b.height-height)<=1) return;
+  frameWin.setBounds({x:Math.max(work.x,Math.min(b.x,work.x+work.width-TOOLBAR_WIDTH)),y:Math.max(work.y,Math.min(b.y,work.y+work.height-height)),width:TOOLBAR_WIDTH,height});
 });
 security.handle('frame:recenter',()=>{
   const p=screen.getCursorScreenPoint(),work=screen.getDisplayNearestPoint(p).workArea,b=selectionWin.getBounds(),width=Math.min(b.width,work.width),height=Math.min(b.height,work.height);

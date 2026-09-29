@@ -255,12 +255,15 @@ async function testFrame() {
   ipcMain.handle('frame:recenter',()=>{recenterCalls++;return {};});
   const heightListener=(event,height)=>{if(frame && event.sender===frame.webContents) frame.setSize(680,Math.max(160,Math.min(640,height)));};
   ipcMain.on('frame:height',heightListener);
-  frame=new BrowserWindow({width:680,height:400,show:false,frame:false,webPreferences:{backgroundThrottling:false,preload:path.join(root,'preload.js')}});
+  // Match the app's initial DIP position; automatic centering can land between
+  // physical pixels at 125% and makes this layout-only fixture nondeterministic.
+  frame=new BrowserWindow({x:24,y:24,width:680,height:400,show:false,frame:false,transparent:true,resizable:false,webPreferences:{backgroundThrottling:false,preload:path.join(root,'preload.js')}});
   await frame.loadFile(path.join(root,'renderer/frame.html'));
   const evaluate=c=>frame.webContents.executeJavaScript(c,true);
   await until(()=>evaluate(`document.getElementById('status').textContent==='框选漫画后开始翻译'`));
   assert.equal(await evaluate(`document.querySelectorAll('.resize-handle').length`),0,'Toolbar does not contain selection resize handles');
-  assert.equal(frame.getBounds().width,680);
+  const initialToolbarWidth=frame.getBounds().width;
+  assert(Math.abs(initialToolbarWidth-680)<=1,`Toolbar width ${initialToolbarWidth} stays within one DIP of 680 after Windows pixel rounding`);
   await snapshot(frame,'frame.png');
   await evaluate(`document.getElementById('lock').click()`);
   assert.equal(await evaluate(`document.querySelector('#lock span').textContent`),'取消翻译');
@@ -301,7 +304,7 @@ async function testFrame() {
   await evaluate(`document.getElementById('glassTone').value='tinted';document.getElementById('glassTone').dispatchEvent(new Event('change'))`);
   assert.equal(await evaluate(`document.documentElement.dataset.glassTone`),'tinted');
   await evaluate(`document.getElementById('dismissMessage').click();document.getElementById('moveSelection').click()`);await until(()=>recenterCalls===1);
-  assert.equal(frame.getBounds().width,680,'Moving selection preserves toolbar width');
+  assert.equal(frame.getBounds().width,initialToolbarWidth,'Moving selection preserves toolbar width');
   await snapshot(frame,'frame-tinted.png');
   ipcMain.removeListener('frame:height',heightListener);
   frame.close();

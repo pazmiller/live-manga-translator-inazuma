@@ -83,6 +83,7 @@ async function main() {
     ui('auth-ui', '认证后翻译与编辑流程', 'backend-auth-ui.cjs'),
     ui('security', 'Electron 窗口与 IPC 安全', 'electron-security-ui.cjs'),
     ui('input', 'Windows 原生输入', 'toolbar-input.cjs'),
+    ui('window-lifecycle', '原生移动与截图恢复', 'window-lifecycle.cjs'),
     ui('responsive', '正常 GPU 响应性能', 'glass-responsive.cjs'),
   ];
   const notCovered = ['真实 OCR / 翻译服务与网络', '人工视觉与系统鼠标验收', '混合 DPI 双屏',
