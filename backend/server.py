@@ -86,7 +86,7 @@ async def invalid_request(_request, _error):
 
 
 class ProviderReq(BaseModel):
-    provider: Literal["openai", "gemini", "deepseek", "google", "claude"] = "deepseek"
+    provider: Literal["openai", "gemini", "deepseek"] = "deepseek"
     model: str | None = Field(default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
     api_key: SecretStr | None = Field(default=None, max_length=4096)
 
@@ -151,8 +151,6 @@ def health():
 def require_provider(provider, config=None):
     if provider in translate.PROVIDERS and not translate.provider_config(provider, config)['api_key']:
         raise HTTPException(400, "请打开 翻译AI配置，为所选服务商填写 API Key")
-    if provider == "claude" and not os.getenv("ANTHROPIC_API_KEY"):
-        raise HTTPException(400, "请在 .env 配置 ANTHROPIC_API_KEY 后重启")
 
 
 def decode_image(req):
@@ -296,12 +294,9 @@ def selection_translate_texts(req: TextsTranslateReq):
     if not _slots.acquire(blocking=False):
         raise HTTPException(429, "翻译服务忙，请稍后重试")
     try:
-        if req.provider == "claude":
-            values = [translate.translate_text(text, req.source, req.target, req.provider) for text in req.texts]
-        else:
-            bubbles = [{"id": index, "text": text} for index, text in enumerate(req.texts)]
-            values = [item["translated"] for item in translate.translated_bubbles(
-                bubbles, None, req.source, req.target, req.provider, threading.Event(), **req.translation_options())]
+        bubbles = [{"id": index, "text": text} for index, text in enumerate(req.texts)]
+        values = [item["translated"] for item in translate.translated_bubbles(
+            bubbles, None, req.source, req.target, req.provider, threading.Event(), **req.translation_options())]
         if len(values) != len(req.texts):
             raise translate.TranslationError("翻译条数与原文不一致，请重试")
         return {"items": [{"text": text, "translated": value} for text, value in zip(req.texts, values)]}

@@ -1,9 +1,5 @@
-import base64
-import io
 import json
 import os
-import re
-import time
 import threading
 import hashlib
 from collections import OrderedDict
@@ -35,53 +31,6 @@ class TranslationError(ValueError):
     """A fixed, user-facing validation message, safe to return from the API."""
 
 
-def _translate_with(translator_cls, texts, source, target):
-    tr = translator_cls(source=source, target=target)
-    out = []
-    for t in texts:
-        t = t.strip()
-        if not t:
-            out.append("")
-            continue
-        for attempt in range(3):
-            try:
-                out.append(tr.translate(t) or "")
-                break
-            except Exception:
-                if attempt == 2:
-                    raise
-                time.sleep(0.6 * (attempt + 1))
-    return out
-
-
-# MyMemory needs region-qualified codes, unlike Google's bare ones.
-MYMEMORY_CODES = {
-    "ja": "ja-JP", "en": "en-US", "ko": "ko-KR",
-    "zh": "zh-CN", "zh-CN": "zh-CN", "zh-TW": "zh-TW",
-}
-
-
-def translate_free(texts, source, target):
-    """Google first; MyMemory as backup when Google rate-limits."""
-    from deep_translator import GoogleTranslator, MyMemoryTranslator
-
-    try:
-        return _translate_with(GoogleTranslator, texts, source, target)
-    except Exception:
-        print("google failed; falling back to mymemory", flush=True)
-        return _translate_with(
-            MyMemoryTranslator, texts,
-            MYMEMORY_CODES.get(source, source), MYMEMORY_CODES.get(target, target),
-        )
-
-
-@lru_cache(maxsize=1)
-def _anthropic_client():
-    import anthropic
-
-    return anthropic.Anthropic(timeout=35, max_retries=0)
-
-
 @lru_cache(maxsize=1)
 def _deepseek_client():
     from openai import OpenAI
@@ -91,7 +40,7 @@ def _deepseek_client():
 
 def translate_deepseek(texts, source, target):
     """DeepSeek is text-only (no vision), so it translates the OCR'd strings
-    directly, same shape as translate_free but with LLM-quality phrasing."""
+    directly, using the shared structured LLM response validation."""
     return list(_deepseek_stream(texts, source, target))
 
 
@@ -191,82 +140,17 @@ def _llm_stream(texts, source, target, provider, config=None):
         resp.close()
 
 
-def _png_b64(pil_img):
-    buf = io.BytesIO()
-    pil_img.save(buf, format="PNG")
-    return base64.b64encode(buf.getvalue()).decode()
-
-
-def _claude_response(content):
-    client = _anthropic_client()
-    kwargs = dict(
-        model=os.environ.get("CLAUDE_MODEL", "claude-opus-5"),
-        max_tokens=4096,
-        output_config={"effort": "low"},
-        messages=[{"role": "user", "content": content}],
-    )
-    try:
-        resp = client.beta.messages.create(
-            betas=["server-side-fallback-2026-07-01"], fallbacks="default", **kwargs
-        )
-    except TypeError:
-        resp = client.messages.create(**kwargs)
-    if resp.stop_reason == "refusal":
-        raise TranslationError("翻译服务拒绝了这段内容，请修改原文或更换引擎")
-    return "".join(b.text for b in resp.content if b.type == "text")
-
-
 def translate_text(text, source, target, provider, config=None):
-    """Translate edited source text; even Claude must not reread an image."""
-    if provider == "claude":
-        raw = _claude_response([{"type": "text", "text": (
-            f"Translate this manga speech bubble from {LANG_NAMES[source]} to {LANG_NAMES[target]}. "
-            "Use the supplied corrected text exactly as your source, in natural, colloquial manga style. "
-            "Reply with ONLY a JSON array containing exactly one nonempty translation string.\n\n"
-            f"Source text:\n{text}"
-        )}])
-        parser = ArrayStream()
-        values = parser.feed(raw)
-        parser.finish(1)
-    elif provider == "deepseek" and config is None:
+    """Translate edited source text without rereading an image."""
+    if provider not in PROVIDERS:
+        raise TranslationError("不支持的翻译服务，请在翻译AI配置中重新选择")
+    if provider == "deepseek" and config is None:
         values = translate_deepseek([text], source, target)
-    elif provider in PROVIDERS:
-        values = list(_llm_stream([text], source, target, provider, config))
     else:
-        values = translate_free([text], source, target)
+        values = list(_llm_stream([text], source, target, provider, config))
     if not isinstance(values, list) or len(values) != 1 or not isinstance(values[0], str) or not values[0].strip():
         raise TranslationError("翻译必须返回一条非空结果，请重试")
     return values[0].strip()
-
-
-def translate_claude_vision(crops, source, target):
-    """crops: list of PIL images, one per bubble. Claude reads and translates each.
-    Returns list of {"text": original, "translated": translation}."""
-    content = []
-    for i, im in enumerate(crops):
-        content.append({"type": "text", "text": f"Bubble {i}:"})
-        content.append({"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": _png_b64(im)}})
-    content.append({
-        "type": "text",
-        "text": (
-            f"Each image above is one manga speech bubble in {LANG_NAMES.get(source, source)}. "
-            f"For every bubble, transcribe the text exactly, then translate it into {LANG_NAMES.get(target, target)} "
-            "in natural, colloquial manga style, matching tone and speaker voice. "
-            "Reply with ONLY a JSON array, one object per bubble in order: "
-            '[{"index": 0, "text": "...", "translated": "..."}, ...]'
-        ),
-    })
-    raw = _claude_response(content)
-    m = re.search(r"\[.*\]", raw, re.S)
-    items = json.loads(m.group(0) if m else raw)
-    out = [{"text": "", "translated": ""} for _ in crops]
-    for it in items:
-        i = int(it.get("index", -1))
-        if 0 <= i < len(out):
-            out[i] = {"text": it.get("text", ""), "translated": it.get("translated", "")}
-    if any(not isinstance(r["translated"], str) or not r["translated"].strip() for r in out):
-        raise TranslationError("翻译响应缺少气泡，请重试")
-    return out
 
 
 _cache = OrderedDict()
@@ -275,15 +159,9 @@ _cache_lock = threading.Lock()
 
 def translated_bubbles(bubbles, pil, source, target, provider, cancelled, config=None):
     """Yield completed bubbles immediately. Cache text, never screenshots."""
-    if provider == "claude":
-        crops = [pil.crop((max(0,int(b["x"])-4), max(0,int(b["y"])-4),
-                           min(pil.width,int(b["x"]+b["w"])+4), min(pil.height,int(b["y"]+b["h"])+4))) for b in bubbles]
-        for b, result in zip(bubbles, translate_claude_vision(crops, source, target)):
-            if cancelled.is_set():
-                return
-            yield {**b, **result, "cached": False}
-        return
-    options = provider_config(provider, config) if provider in PROVIDERS else {}
+    if provider not in PROVIDERS:
+        raise TranslationError("不支持的翻译服务，请在翻译AI配置中重新选择")
+    options = provider_config(provider, config)
     model = options.get('model', provider)
     credential_id = hashlib.sha256(options.get('api_key', '').encode()).hexdigest()
     # Keep adjacent dialogue as context for the model and for the cache key.
@@ -305,10 +183,8 @@ def translated_bubbles(bubbles, pil, source, target, provider, cancelled, config
     texts = [b["text"] for b, _ in missing]
     if provider == 'deepseek' and config is None:
         stream = _deepseek_stream(texts, source, target)
-    elif provider in PROVIDERS:
-        stream = _llm_stream(texts, source, target, provider, config)
     else:
-        stream = iter(translate_free(texts, source, target))
+        stream = _llm_stream(texts, source, target, provider, config)
     pending_cache = {}
     completed = 0
     try:

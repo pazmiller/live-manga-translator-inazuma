@@ -85,7 +85,7 @@ global.fetch = async (url, options = {}) => {
   const endpoint = new URL(url).pathname;
   requests.push(endpoint);
   if (endpoint === '/health') return Response.json({service:'manga-window-translator', protocol:4,
-    ocr:'ready', providers:{deepseek:true, google:true, claude:false}});
+    ocr:'ready', providers:{deepseek:true, openai:false, gemini:false}});
   assert.equal(endpoint, '/translate/stream', `Unexpected request: ${endpoint}`);
   if (streamMode === 'pending') return new Promise((_resolve, reject) => {
     const abort = () => reject(options.signal.reason || new Error('Cancelled'));

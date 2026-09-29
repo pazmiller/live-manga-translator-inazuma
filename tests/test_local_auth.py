@@ -36,7 +36,7 @@ class LocalAuthTests(unittest.TestCase):
         self.assertEqual(self.client.get('/health', headers=self.headers).status_code, 200)
         with patch.object(server.translate, 'translate_text', return_value='translated') as translate:
             response = self.client.post('/bubble/translate', headers=self.headers,
-                                        json={'provider':'google', 'text':'hello'})
+                                        json={'provider':'deepseek', 'api_key':'test-placeholder', 'text':'hello'})
             self.assertEqual(response.status_code, 200)
             translate.assert_called_once()
 

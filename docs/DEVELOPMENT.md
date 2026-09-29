@@ -23,6 +23,9 @@ npm start
 
 ## 可选 Manga OCR
 
+依赖升级正在独立候选环境中验证，原环境仅保留作对照。版本、测试结果及临时切换方法见
+[Python 依赖清理与候选验证](PYTHON-DEPENDENCIES.md)。候选尚未晋升为默认打包环境。
+
 使用独立 Python 3.10 环境：
 
 ```powershell

@@ -62,6 +62,28 @@ class ProviderTests(unittest.TestCase):
                                                  dict(model=model, api_key=key)))
         self.assertEqual(len(calls), 4)
 
+    def test_retired_providers_are_rejected_without_translation_or_ocr(self):
+        http = authenticated_client(server)
+        self.addCleanup(http.close)
+        with patch.object(translate, '_llm_client') as client, patch.object(server.ocr, 'ocr_lines') as ocr:
+            for provider in ('google', 'mymemory', 'claude'):
+                for route, payload in (
+                    ('/bubble/translate', {'text': 'original'}),
+                    ('/selection/translate-texts', {'texts': ['original']}),
+                    ('/translate', {'image': 'unused'}),
+                    ('/translate/stream', {'image': 'unused'}),
+                ):
+                    with self.subTest(provider=provider, route=route):
+                        response = http.post(route, json={**payload, 'provider': provider, 'api_key': 'test-private-key'})
+                        self.assertEqual(response.status_code, 422)
+                        self.assertNotIn('test-private-key', response.text)
+                with self.assertRaises(translate.TranslationError):
+                    translate.translate_text('original', 'ja', 'en', provider)
+                with self.assertRaises(translate.TranslationError):
+                    list(translate.translated_bubbles([], None, 'ja', 'en', provider, threading.Event()))
+            client.assert_not_called()
+            ocr.assert_not_called()
+
     def test_http_single_batch_and_stream_receive_request_credentials(self):
         http = authenticated_client(server)
         self.addCleanup(http.close)

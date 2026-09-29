@@ -1,3 +1,4 @@
+import os
 import base64
 import io
 import json
@@ -141,12 +142,15 @@ class EndpointTests(unittest.TestCase):
     def setUp(self):
         from backend_test_support import authenticated_client
         import server
+        credentials = patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-placeholder"})
+        credentials.start()
+        self.addCleanup(credentials.stop)
         self.server = server
         server._ocr_cache.clear()
         self.client = authenticated_client(server)
         buffer = io.BytesIO()
         Image.new("RGB", (100, 100), "white").save(buffer, format="PNG")
-        self.payload = dict(image=base64.b64encode(buffer.getvalue()).decode(), provider="google")
+        self.payload = dict(image=base64.b64encode(buffer.getvalue()).decode(), provider="deepseek")
 
     def tearDown(self):
         self.client.close()

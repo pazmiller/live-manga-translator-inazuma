@@ -244,7 +244,7 @@ async function testEditor(win,base,begin,dismissedKeys) {
 
 async function testFrame() {
   let finish,frame,lockCalls=0,retryCalls=0,restoreCalls=0,recenterCalls=0,readingFallback=false;
-  ipcMain.handle('frame:health',()=>({ocr:'ready',providers:{deepseek:true,google:true,claude:false}}));
+  ipcMain.handle('frame:health',()=>({ocr:'ready',providers:{deepseek:true,openai:false,gemini:false}}));
   ipcMain.handle('frame:lock',()=>{lockCalls++;return new Promise(resolve=>{finish=resolve;});});
   ipcMain.handle('frame:cancel',()=>finish({cancelled:true}));
   ipcMain.handle('frame:clear',()=>finish?.({cancelled:true}));
