@@ -1,6 +1,6 @@
 {
   "name": "manga-window-translator",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Live manga translation for Windows",
   "main": "main.js",
   "scripts": {
@@ -26,6 +26,6 @@
   "license": "ISC",
   "devDependencies": {
     "electron": "^44.4.2",
-    "electron-builder": "26.0.12"
+    "electron-builder": "26.15.3"
   }
 }
