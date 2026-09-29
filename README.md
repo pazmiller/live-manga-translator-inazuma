@@ -12,14 +12,14 @@ Windows 屏幕漫画翻译工具：框选正在阅读的漫画，在本地识别
 
 面向 Windows x64。使用安装包时，无需安装 Node.js、Python 或单独启动后端；AI 翻译需要联网和你自己的服务商 API Key。
 
-| 版本 | 适合谁 | 包含内容 | 已构建的 1.1.0 安装包 |
+| 版本 | 适合谁 | 包含内容 | 已构建的 1.2.1 安装包 |
 | --- | --- | --- | --- |
-| 标准版 | 希望安装体积较小、使用普通 OCR | Python 运行时、普通 OCR 及模型 | `Inazuma-Setup-1.1.0-x64.exe`，约 214 MiB |
-| MangaOCR 完整版 | 需要日文气泡加强识别 | 标准版内容，以及 Manga OCR、CPU 推理运行时和模型 | `Inazuma-MangaOCR-Setup-1.1.0-x64.exe`，约 748 MiB；安装后约 1.72 GiB |
+| 标准版 | 希望安装体积较小、使用普通 OCR | Python 运行时、普通 OCR 及模型 | `Inazuma-Setup-1.2.1-x64.exe`，约 210 MiB |
+| MangaOCR 完整版 | 需要日文气泡加强识别 | 标准版内容，以及 Manga OCR、CPU 推理运行时和模型 | `Inazuma-MangaOCR-Setup-1.2.1-x64.exe`，约 761 MiB；解包载荷约 1.79 GiB |
 
 运行对应安装程序，安装后从桌面或开始菜单打开 **Inazuma** / **Inazuma MangaOCR**。安装包尚未代码签名，Windows 可能显示未知发布者。
 
-**源码与安装包的区别：** 当前源码已增加本地后端认证、Electron 窗口保护，以及移动选区导致面板变宽和截图排除的修复。现有两个 1.1.0 安装包尚未重新构建，不包含这些后续改动。安装包大小也是此前构建的参考值。
+**1.2.1 更新：** 两个安装包包含本地后端认证、Electron 窗口保护、窗口移动与截图修复，并清理了闲置翻译依赖。MangaOCR 完整版已采用新版 PyTorch / Transformers CPU 运行时。验证范围与 SHA-256 见 [发布验证记录](docs/RELEASE-1.2.1.md)。旧 1.1.0 安装包不包含这些后续改动。
 
 从源码运行或自行打包，见 [开发文档](docs/DEVELOPMENT.md)。
 

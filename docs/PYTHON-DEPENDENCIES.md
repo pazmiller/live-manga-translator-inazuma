@@ -1,6 +1,6 @@
-# Python 依赖清理与 MangaOCR 候选验证
+# Python 依赖清理与 MangaOCR 升级记录
 
-核对日期：2026-09-29。此次没有重建或发布安装包。
+核对日期：2026-09-29。新版依赖已用于 v1.2.1 正式环境。
 
 ## 普通环境
 
@@ -26,14 +26,13 @@ backend/.venv/Scripts/python.exe -m pip uninstall deep-translator anthropic beau
 backend/.venv/Scripts/python.exe -m pip check
 ```
 
-## MangaOCR 候选环境
+## MangaOCR 正式环境
 
-原环境 `.manga-ocr-venv` 和正式 `requirements-manga-ocr.txt` 保留不变。
-候选环境位于已被 Git 忽略的 `.qa/manga-candidate-env`，版本清单位于
-[`backend/requirements-manga-candidate.txt`](../backend/requirements-manga-candidate.txt)。
-默认启动和打包脚本仍使用原环境；候选通过识别测试不等于已完成安装包验收。
+已验证的候选依赖晋升至 [正式清单](../backend/requirements-manga-ocr.txt)，
+默认开发和构建均使用重新创建的 `.manga-ocr-venv`。不再需要候选清单或环境变量切换。
+以下表格保留升级前后的对照记录：
 
-| 依赖 | 原环境 | 候选环境 |
+| 依赖 | 升级前 | v1.2.1 正式环境 |
 | --- | --- | --- |
 | Python | 3.10.11 | 3.10.11 |
 | PyTorch | 2.6.0 | 2.14.0（实际 wheel 为 CPU 构建） |
@@ -41,29 +40,27 @@ backend/.venv/Scripts/python.exe -m pip check
 | setuptools | 65.5.0 | 84.0.0 |
 | manga-ocr | 0.1.16 | 0.1.16 |
 
-创建同类候选环境：
+创建正式开发及构建环境：
 
 ```powershell
-py -3.10 -m venv .qa/manga-candidate-env
-.qa/manga-candidate-env/Scripts/python.exe -m pip install --index-url https://pypi.org/simple --upgrade pip==26.2.1 setuptools==84.0.0
-.qa/manga-candidate-env/Scripts/python.exe -m pip install --index-url https://pypi.org/simple -r backend/requirements-manga-candidate.txt -r backend/requirements-build.txt
-.qa/manga-candidate-env/Scripts/python.exe -m pip check
+py -3.10 -m venv .manga-ocr-venv
+.manga-ocr-venv/Scripts/python.exe -m pip install --index-url https://pypi.org/simple --upgrade pip==26.2.1 setuptools==84.0.0
+.manga-ocr-venv/Scripts/python.exe -m pip install --index-url https://pypi.org/simple -r backend/requirements-manga-ocr.txt -r backend/requirements-build.txt
+.manga-ocr-venv/Scripts/python.exe -m pip check
 ```
 
-这是候选依赖清单，尚未锁定完整间接依赖及 wheel 哈希；后续重新解析可能产生不同的间接版本。
+正式清单固定主要模型依赖和关键配套版本；尚未锁定完整间接依赖及 wheel 哈希；后续重新解析可能产生不同的间接版本。
 本次主要配套版本：tokenizers 0.23.2、huggingface-hub 1.33.0、safetensors 0.8.0、
 numpy 2.2.6、Pillow 12.3.0、PyInstaller 6.22.0。
 
-临时让开发版试用候选（关闭已有应用后，在新的 PowerShell 中执行）：
+若之前在终端设置了候选解释器，启动前清除旧覆盖值：
 
 ```powershell
-$env:MWT_MANGA_OCR_PYTHON = (Resolve-Path .qa/manga-candidate-env/Scripts/python.exe).Path
+Remove-Item Env:MWT_MANGA_OCR_PYTHON -ErrorAction SilentlyContinue
 npm start
-# 退出应用后恢复该终端的默认选择
-Remove-Item Env:MWT_MANGA_OCR_PYTHON
 ```
 
-## 验证结果与边界
+## 晋升前的对照结果与边界
 
 - 普通环境 47 个包、候选环境 53 个包的 PyPI 版本漏洞公告查询均成功，未命中公告。
   这不覆盖未知漏洞、所有原生 DLL 或现有安装包，也不代表原 MangaOCR 环境已修复。
@@ -84,8 +81,7 @@ Remove-Item Env:MWT_MANGA_OCR_PYTHON
 
 ```powershell
 .manga-ocr-venv/Scripts/python.exe tests/manga-dependency-check.py
-.qa/manga-candidate-env/Scripts/python.exe tests/manga-dependency-check.py
 ```
 
-晋升候选为默认环境前，应继续验证更多竖排、注音和低清气泡，以及冻结后的 worker
-和安装包。当前构建脚本仍会读取旧 MangaOCR 环境，不应把候选审查结果当作发布包结论。
+v1.2.1 的冻结程序及安装载荷验收结果另见 [发布验证记录](RELEASE-1.2.1.md)。
+这些小样本不能代替更多竖排、注音和低清漫画的识别精度评估。

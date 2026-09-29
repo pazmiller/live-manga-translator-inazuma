@@ -2,7 +2,7 @@
 
 [返回 README](../README.md)
 
-此文档描述当前源码。现有两个 1.1.0 安装包尚未重建，不包含后续认证、Electron 加固和窗口修复；源码验证通过不代表旧安装包包含这些变化。
+此文档描述当前源码。两个 1.2.1 安装包已重建，包含认证、Electron 加固、窗口修复与依赖更新；验证范围见 [发布验证记录](RELEASE-1.2.1.md)。旧 1.1.0 安装包未被修改。
 
 ## 环境与启动
 
@@ -23,8 +23,8 @@ npm start
 
 ## 可选 Manga OCR
 
-依赖升级正在独立候选环境中验证，原环境仅保留作对照。版本、测试结果及临时切换方法见
-[Python 依赖清理与候选验证](PYTHON-DEPENDENCIES.md)。候选尚未晋升为默认打包环境。
+新版依赖已晋升到正式 `requirements-manga-ocr.txt`，默认开发及打包均使用
+`.manga-ocr-venv`。升级记录和验证边界见 [Python 依赖记录](PYTHON-DEPENDENCIES.md)。
 
 使用独立 Python 3.10 环境：
 
@@ -95,7 +95,7 @@ npm run dist:win
 npm run test:packaged
 ```
 
-构建会预热并收集普通 OCR 各源语言模型；首次可能下载模型、Electron 和 NSIS。输出为 `dist/Inazuma-Setup-1.1.0-x64.exe`（版本号随 package.json 更新）。也可运行 `dist/win-unpacked/Inazuma.exe`，但必须保留整个 `win-unpacked` 目录，不能只分发里面的 exe。
+构建会预热并收集普通 OCR 各源语言模型；首次可能下载模型、Electron 和 NSIS。输出为 `dist/Inazuma-Setup-1.2.1-x64.exe`（版本号随 package.json 更新）。也可运行 `dist/win-unpacked/Inazuma.exe`，但必须保留整个 `win-unpacked` 目录，不能只分发里面的 exe。
 
 MangaOCR 完整版需先准备 `.manga-ocr-venv`，并缓存固定模型版本：
 
@@ -106,7 +106,7 @@ npm run dist:win:manga
 node tests/packaged-smoke.cjs "dist/mangaocr/win-unpacked/Inazuma MangaOCR.exe" --manga
 ```
 
-输出为 `dist/mangaocr/Inazuma-MangaOCR-Setup-1.1.0-x64.exe`。安装版使用独立安装标识、内置模型、CPU 推理与 Hugging Face 离线模式；无需用户 Python 或联网获取模型。模型来自 [kha-white/manga-ocr-base](https://huggingface.co/kha-white/manga-ocr-base)，发行包保留第三方许可证信息。
+输出为 `dist/mangaocr/Inazuma-MangaOCR-Setup-1.2.1-x64.exe`。安装版使用独立安装标识、内置模型、CPU 推理与 Hugging Face 离线模式；无需用户 Python 或联网获取模型。模型来自 [kha-white/manga-ocr-base](https://huggingface.co/kha-white/manga-ocr-base)，发行包保留第三方许可证信息。
 
 `test:packaged` 检查实际 exe、内置 OCR、配置与语言切换及退出清理，不调用翻译服务。`--manga` 还使用空缓存与无系统 Python 的 PATH 验证内置 Manga OCR。修改源码后必须重新构建再测试，不能用旧 exe 的结果替代。
 

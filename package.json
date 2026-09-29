@@ -1,6 +1,6 @@
 {
   "name": "manga-window-translator",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Live manga translation for Windows",
   "main": "main.js",
   "scripts": {
