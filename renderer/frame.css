@@ -12,19 +12,31 @@ select option { background: #f6f9fd; color: #203044; }
 #toolbar::after { content:""; position:absolute; inset:1px; border-radius:23px; pointer-events:none; border:1px solid transparent; background:linear-gradient(115deg, #ffffffb0, #ffffff08 30%, #ffffff00 62%, #d4eaff80) border-box; mask:linear-gradient(#fff 0 0) padding-box, linear-gradient(#fff 0 0); mask-composite:exclude; opacity:calc(.42 + var(--liquid-energy, 0) * .4); }
 /* Keep native dragging out of the composited control panel. A broad drag region
    can swallow button exclusions on Windows even though DOM click() still works. */
-.heading { display: flex; align-items: center; gap: 6px; height: 20px; -webkit-app-region: drag; }
+.heading { display: flex; align-items: center; gap: 6px; height: 28px; -webkit-app-region: drag; }
 .app-mark { display: inline-flex; align-items: center; justify-content: center; height: 20px; width: 20px; border-radius: 6px; color: #fff; background: linear-gradient(150deg, #58afff, #0071f4); box-shadow: inset 0 1px 1px #ffffff70; }
 .app-mark svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.35; stroke-linejoin: round; }
 h1 { font-size: 12px; margin: 0; font-weight: 650; letter-spacing: .03em; }
 .heading-hint { color: var(--glass-muted); font-size: 10px; margin-left: 4px; }
 .drag-handle { margin: 0 auto; font-size: 18px; line-height: 1; color: var(--glass-muted); opacity:.7; }
 .heading .text-button { font-size: 10px; height: 22px; padding: 0 7px; color: var(--glass-muted); }
+.heading #uiLanguage { color: var(--glass-accent); font-size: 11px; font-weight: 650; border-color: var(--glass-hairline); flex-shrink: 0; }
+html[lang="en"] .heading-hint { display: none; }
+html[lang="en"] #source { width: 106px; }
+html[lang="en"] #target { width: 112px; }
+html[lang="en"] #glassTone { width: 75px; }
+html[lang="en"] .translate-actions { min-width: 145px; }
+#configuration { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; height: 28px; padding: 0 10px; border-radius: 10px; border-color: var(--glass-accent); background: var(--accent-soft); color: var(--glass-accent); font-size: 12px; font-weight: 650; }
+#configuration:hover { background: var(--glass-control-hover); box-shadow: 0 2px 8px #087cff25, inset 0 1px 0 #ffffff80; }
+#configuration svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; }
 .icon-button { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; font-size: 19px; border: none; background: transparent; border-radius: 50%; line-height: 1; }
 #quit:hover { background: #ffdadc; color: #b03142; }
 #quit.armed { width: 44px; font-size: 10px; background: #d84458; color: #fff; border-radius: 8px; }
 .row { display: flex; align-items: center; gap: 7px; min-width: 0; }
-.translation-row { height: 36px; }
-.translation-row > button, .translation-row > select { height: 34px; }
+.translation-row { min-height: 36px; align-items: flex-start; }
+.translation-row > button, .translation-row > select, .translate-actions > button { height: 34px; }
+.translate-actions { display: flex; flex-direction: column; gap: 4px; min-width: 112px; }
+.translate-actions > button { width: 100%; }
+#enhanceOcr { color: var(--glass-accent); background: var(--accent-soft); border-color: rgba(8, 124, 255, .22); font-weight: 600; }
 .control-group { display: inline-flex; align-items: center; background: var(--glass-control); border: 1px solid var(--glass-hairline); border-radius: 12px; box-shadow:inset 0 1px 0 #ffffff30; }
 .control-group select, .control-group button { border: 0; background: transparent; }
 .language-group { height: 34px; padding: 0 3px; }

@@ -1,25 +1,30 @@
-const {app, BrowserWindow, ipcMain, desktopCapturer, screen, globalShortcut, nativeImage} = require('electron');
+const {app, BrowserWindow, ipcMain, desktopCapturer, screen, globalShortcut, nativeImage, safeStorage} = require('electron');
 const path = require('path');
+const {createSecurity,webPreferences} = require('./electron-security.cjs');
+const security = createSecurity(ipcMain);
 const os = require('os');
-const {spawn} = require('child_process');
+const {createBackendService} = require('./backend-service.cjs');
+const {AUTH_ERROR} = require('./backend-client.cjs');
 const {readEvents, localBubble, intersect} = require('./pipeline');
 const {ReadingWatch} = require('./reading-watch');
 const {makeGlassCapture} = require('./glass-capture');
+const {createSettingsStore} = require('./settings-store.cjs');
 
-const BACKEND_PORT = Number(process.env.MWT_BACKEND_PORT || 8765);
-const BACKEND_URL = `http://127.0.0.1:${BACKEND_PORT}`;
-const BORDER = 6, MIN_SIZE = 64;
+let BACKEND_PORT = Number(process.env.MWT_BACKEND_PORT || 8765);
+const BORDER = 6, MIN_SIZE = 64, TOOLBAR_WIDTH = 680;
 const windowsBuild = Number(os.release().split('.')[2]);
 const supportsWatch = process.platform === 'win32' && windowsBuild >= 19041;
 // getSources is a screenshot API, not a low-latency video feed. On Windows it
 // can stall the input thread for hundreds of milliseconds even when awaited.
 const experimentalGlassCapture = process.env.MWT_GLASS_CAPTURE === '1';
-let frameWin, selectionWin, backendProc, cursorTimer, watchTimer, glassTimer;
+let frameWin, selectionWin, backend, cursorTimer, watchTimer, glassTimer;
+let settingsWin, settingsStore;
 let activeJob = null, bubbleTask = null, lastBatch = null, editorWin = null;
 let jobNumber = 0, generation = 0, reveal = false, interactionLocked = false;
 let backendError = '', readingMode = 'fixed', stale = false, sampling = false;
 let readingState = '', preferences = {}, watchVersion = 0;
 const overlays = new Map(), mouseStates = new Map(), results = new Map(), contexts = new Map();
+const pendingMessages = new WeakMap();
 const watcher = new ReadingWatch(1000);
 const glassCapture = makeGlassCapture({screen,desktopCapturer,send,
   canCapture:()=>supportsWatch && experimentalGlassCapture,isPaused:()=>Boolean(activeJob || bubbleTask)});
@@ -30,16 +35,24 @@ const sameRect = (a,b) => ['x','y','width','height'].every(key=>a[key]===b[key])
 
 function send(win, channel, payload) {
   if (!win || win.isDestroyed()) return;
-  const deliver = () => { if (!win.isDestroyed()) win.webContents.send(channel,payload); };
-  if (win.webContents.isLoading()) win.webContents.once('did-finish-load',deliver);
-  else deliver();
+  if (win.webContents.isLoading()) {
+    let pending=pendingMessages.get(win);
+    if (!pending) {
+      pending=[];pendingMessages.set(win,pending);
+      win.webContents.once('did-finish-load',()=>{
+        pendingMessages.delete(win);
+        if (!win.isDestroyed()) for (const [queuedChannel,queuedPayload] of pending) win.webContents.send(queuedChannel,queuedPayload);
+      });
+    }
+    pending.push([channel,payload]);
+  } else win.webContents.send(channel,payload);
 }
 function broadcast(channel,payload) {for(const win of overlays.values()) send(win,channel,payload);}
 function trackMouse(win) {
   mouseStates.set(win,{regions:[],dragging:false,ignore:null,motion:null});
   win.on('closed',()=>{mouseStates.delete(win);if(editorWin===win) editorWin=null;});
-  // Keep our controls out of the local optical feed to prevent mirror feedback.
-  if(supportsWatch) win.setContentProtection(true);
+  // Only the opt-in continuous optical feed needs permanent capture exclusion.
+  if(supportsWatch && experimentalGlassCapture) win.setContentProtection(true);
   glassCapture.register(win);
 }
 function selectionState() {
@@ -48,29 +61,34 @@ function selectionState() {
     send(selectionWin,'selection:state',{width:rect.width,height:rect.height,readingMode,stale});
   }
 }
-function setStale(value) {stale=value;broadcast('overlay:stale',{stale});selectionState();}
+function setStale(value) {stale=value;broadcast('overlay:stale',{stale});selectionState();recoveryState();}
 function readingStatus(state,text) {
   if(readingState===state) return;
   readingState=state;send(frameWin,'frame:readingState',{state,text});
 }
 function createWindows() {
   const work=screen.getPrimaryDisplay().workArea;
-  frameWin=new BrowserWindow({x:work.x+24,y:work.y+24,width:680,height:220,
+  frameWin=new BrowserWindow({x:work.x+24,y:work.y+24,width:TOOLBAR_WIDTH,height:220,
+    show:!app.commandLine.hasSwitch('smoke-test'),
     transparent:true,frame:false,alwaysOnTop:true,hasShadow:false,resizable:false,
-    webPreferences:{preload:path.join(__dirname,'preload.js'),contextIsolation:true}});
+    webPreferences:{preload:path.join(__dirname,'preload.js'),...webPreferences}});
   trackMouse(frameWin);frameWin.setAlwaysOnTop(true,'screen-saver');
+  security.protectWindow(frameWin,'toolbar',path.join(__dirname,'renderer/frame.html'));
   frameWin.loadFile(path.join(__dirname,'renderer/frame.html'));
   frameWin.on('closed',()=>{frameWin=null;app.quit();});
   selectionWin=new BrowserWindow({x:work.x+70,y:work.y+260,width:620,height:Math.max(MIN_SIZE,Math.min(640,work.height-280)),
+    show:!app.commandLine.hasSwitch('smoke-test'),
     minWidth:MIN_SIZE,minHeight:MIN_SIZE,transparent:true,frame:false,alwaysOnTop:true,
     hasShadow:false,resizable:false,skipTaskbar:true,
-    webPreferences:{preload:path.join(__dirname,'preload.js'),contextIsolation:true}});
+    webPreferences:{preload:path.join(__dirname,'preload.js'),...webPreferences}});
   trackMouse(selectionWin);selectionWin.setAlwaysOnTop(true,'screen-saver');
+  security.protectWindow(selectionWin,'selection',path.join(__dirname,'renderer/selection.html'));
   selectionWin.loadFile(path.join(__dirname,'renderer/selection.html')).then(selectionState);
   const changed=()=>{
     selectionState();
     watchVersion++;
     if(readingMode==='watch' && results.size) {watcher.invalidate();setStale(true);readingStatus('changed','选区已移动，停稳后可重新翻译');}
+    recoveryState();
   };
   selectionWin.on('move',changed);selectionWin.on('resize',changed);
   selectionWin.on('closed',()=>{selectionWin=null;app.quit();});
@@ -80,8 +98,9 @@ function getOverlay(display) {
   if(overlays.has(key)) return overlays.get(key);
   const win=new BrowserWindow({...display.bounds,transparent:true,frame:false,alwaysOnTop:true,
     hasShadow:false,resizable:false,movable:false,skipTaskbar:true,show:false,
-    webPreferences:{preload:path.join(__dirname,'preload.js'),contextIsolation:true}});
+    webPreferences:{preload:path.join(__dirname,'preload.js'),...webPreferences}});
   trackMouse(win);win.setAlwaysOnTop(true,'screen-saver');win.setIgnoreMouseEvents(true,{forward:true});
+  security.protectWindow(win,'overlay',path.join(__dirname,'renderer/overlay.html'));
   win.loadFile(path.join(__dirname,'renderer/overlay.html')).then(()=>{send(win,'overlay:preferences',preferences);win.showInactive();});
   win.on('closed',()=>overlays.delete(key));overlays.set(key,win);return win;
 }
@@ -89,7 +108,17 @@ async function captureRegion(selected,preview=false) {
   const display=screen.getDisplayMatching(selected),rect=intersect(selected,display.bounds);
   if(rect.width<8 || rect.height<8) throw new Error('选区在屏幕外，请重新框选');
   const width=preview?Math.min(1280,Math.round(display.size.width*display.scaleFactor)):Math.round(display.size.width*display.scaleFactor);
-  const sources=await desktopCapturer.getSources({types:['screen'],thumbnailSize:{width,height:Math.round(width*display.size.height/display.size.width)}});
+  // Watch sampling must see the manga beneath the overlays, but ordinary OS
+  // screenshots should include our UI. Restore exclusion even on capture failure.
+  const excluded=preview && supportsWatch ? [frameWin,selectionWin,settingsWin,...overlays.values()].filter(w=>w && !w.isDestroyed()) : [];
+  let sources;
+  try {
+    for(const win of excluded) win.setContentProtection(true);
+    if(excluded.length) await sleep(40);
+    sources=await desktopCapturer.getSources({types:['screen'],thumbnailSize:{width,height:Math.round(width*display.size.height/display.size.width)}});
+  } finally {
+    for(const win of excluded) if(!win.isDestroyed()) win.setContentProtection(experimentalGlassCapture && win!==settingsWin);
+  }
   const source=sources.find(s=>s.display_id===String(display.id));
   if(!source || source.thumbnail.isEmpty()) throw new Error('无法截取屏幕，请检查屏幕录制权限');
   const size=source.thumbnail.getSize(),scale=size.width/display.bounds.width;
@@ -108,36 +137,36 @@ async function waitForBackend(signal,timeoutMs=60000) {
   while(Date.now()-start<timeoutMs) {
     signal?.throwIfAborted();if(backendError) throw new Error(backendError);
     try {
-      const response=await fetch(`${BACKEND_URL}/health`,{signal:AbortSignal.timeout(1000)});
+      const response=await backend.request('/health',{signal:AbortSignal.any([AbortSignal.timeout(1000), ...(signal?[signal]:[])])});
       if(response.ok) {
         const data=await response.json();
-        if(data.service!=='manga-window-translator' || data.protocol!==3) throw new Error('端口上是旧版服务，请退出旧版应用后重试');
-        return data;
+        if(data.service!=='manga-window-translator' || data.protocol!==4) throw new Error('端口上是旧版服务，请退出旧版应用后重试');
+        const settings=settingsStore.summary();
+        return {...data,settings,providers:Object.fromEntries(Object.entries(settings.providers).map(([id,config])=>[id,config.hasKey]))};
       }
-    } catch(error) {if(error.message.includes('旧版服务')) throw error;}
+    } catch(error) {if(error.message===AUTH_ERROR || error.message.includes('旧版服务')) throw error;}
     await sleep(200);
   }
   throw new Error('后端启动超时，请检查 Python 环境后重启');
 }
-async function startBackend() {
-  try {
-    const response=await fetch(`${BACKEND_URL}/health`,{signal:AbortSignal.timeout(700)});
-    if(response.ok) {
-      const info=await response.json();
-      if(info.service==='manga-window-translator' && info.protocol===3) return;
-      backendError='端口被旧版服务占用，请退出旧版应用后重试';return;
-    }
-  } catch {}
-  backendProc=spawn(path.join(__dirname,'backend','.venv','Scripts','python.exe'),['server.py',String(BACKEND_PORT)],{
-    cwd:path.join(__dirname,'backend'),stdio:['ignore','pipe','pipe'],windowsHide:true,env:{...process.env,PYTHONIOENCODING:'utf-8'}});
-  backendProc.stdout.on('data',d=>process.stdout.write(`[py] ${d}`));backendProc.stderr.on('data',d=>process.stderr.write(`[py] ${d}`));
-  backendProc.on('error',()=>{backendError='Python 启动失败，请按 README 安装后端环境';});
-  backendProc.on('exit',()=>{backendProc=null;backendError='后端已停止，请重启应用';});
+function startBackend() {
+  const backendDir=app.isPackaged ? path.join(process.resourcesPath,'backend') : path.join(__dirname,'backend');
+  const executable=app.isPackaged ? path.join(backendDir,'inazuma-backend.exe') : path.join(backendDir,'.venv','Scripts','python.exe');
+  const args=app.isPackaged ? [String(BACKEND_PORT)] : ['server.py',String(BACKEND_PORT)];
+  backend=createBackendService({executable,args,cwd:backendDir,port:BACKEND_PORT,
+    env:{...process.env,PYTHONIOENCODING:'utf-8',
+      ...(app.isPackaged ? {MWT_ENV_FILE:path.join(app.getPath('userData'),'settings.env.txt')} : {})},
+    onError:()=>{backendError='后端启动失败或已停止，请检查端口占用后重启应用';}});
+  backend.start();
 }
 function cancelJob() {activeJob?.controller.abort();bubbleTask?.abort();}
 function recoveryState() {
   const c=lastBatch;
-  send(frameWin,'frame:recovery',{available:Boolean(c && !c.success && c.regions.size>c.completed.size),canRestore:Boolean(c && !c.success && c.previous.length),completed:c?.completed.size||0,total:c?.regions.size||0});
+  const selected=selectionWin && !selectionWin.isDestroyed() ? innerRect(selectionWin.getBounds()) : null;
+  const matches=Boolean(c && selected && sameRect(intersect(selected,c.capture.display.bounds),c.capture.rect));
+  send(frameWin,'frame:recovery',{available:Boolean(c && !c.success && c.regions.size>c.completed.size),canRestore:Boolean(c && !c.success && c.previous.length),
+    canEnhance:Boolean(c && c.success && matches && !stale && c.opts.source==='ja' && [...c.completed.keys()].some(id=>results.has(`${c.id}:${id}`))),
+    completed:c?.completed.size||0,total:c?.regions.size||0});
 }
 function clearAll() {
   generation++;watchVersion++;cancelJob();lastBatch=null;results.clear();contexts.clear();editorWin=null;
@@ -151,6 +180,7 @@ function pruneCaptures() {
 }
 async function runLock(opts,retry=false) {
   if(activeJob || bubbleTask) return {error:'已有翻译任务正在进行'};
+  if(settingsWin) return {error:'请先完成或关闭 翻译AI配置'};
   if(editorWin) return {error:'请先完成或关闭单条编辑'};
   if(retry && stale) return {error:'画面已变化，请翻译新页；补译使用的是上一张截图'};
   let context=retry?lastBatch:null;
@@ -161,6 +191,7 @@ async function runLock(opts,retry=false) {
   const current=()=>activeJob===job && generation===job.generation && !signal.aborted;
   const progress=text=>{if(current()) {send(frameWin,'frame:status',{text});send(context?.overlay,'overlay:progress',{text});}};
   try {
+    if(!retry) opts={...opts,model:settingsStore.credentials(opts.provider).model};
     progress('正在连接翻译服务…');await waitForBackend(signal);signal.throwIfAborted();
     if(!retry) {
       const selected=innerRect(selectionWin.getBounds());
@@ -183,9 +214,9 @@ async function runLock(opts,retry=false) {
       rect:{x:capture.rect.x-capture.display.bounds.x,y:capture.rect.y-capture.display.bounds.y,width:capture.rect.width,height:capture.rect.height},
       toolbar:{x:toolbar.x-capture.display.bounds.x,y:toolbar.y-capture.display.bounds.y,width:toolbar.width,height:toolbar.height}});
     begun=true;progress(retry?'正在补译剩余内容…':'正在识别文字…');
-    const body={image:capture.png.toString('base64'),source:opts.source,target:opts.target,provider:opts.provider};
+    const body={image:capture.png.toString('base64'),source:opts.source,target:opts.target,...settingsStore.credentials(opts.provider,opts.model)};
     if(retry) body.only_ids=[...context.regions.keys()].filter(id=>!context.completed.has(id));
-    const response=await fetch(`${BACKEND_URL}/translate/stream`,{method:'POST',signal,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const response=await backend.request('/translate/stream',{method:'POST',signal,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     let summary;
     await readEvents(response,event=>{
       if(!current()) return;
@@ -239,22 +270,102 @@ function bubbleEntry(key) {
   if(!entry || !context) throw new Error('这条译文的截图已过期，请重新翻译选区');
   return {entry,context};
 }
-function bubbleCrop(entry,context) {
+function bubbleCrop(entry,context,padding=8) {
   const image=nativeImage.createFromBuffer(context.capture.png),size=image.getSize(),b=entry.raw;
-  const x=Math.max(0,Math.floor(b.x-8)),y=Math.max(0,Math.floor(b.y-8));
-  return image.crop({x,y,width:Math.max(1,Math.min(size.width-x,Math.ceil(b.w+16))),height:Math.max(1,Math.min(size.height-y,Math.ceil(b.h+16)))});
+  const x=Math.max(0,Math.floor(b.x-padding)),y=Math.max(0,Math.floor(b.y-padding));
+  return image.crop({x,y,width:Math.max(1,Math.min(size.width-x,Math.ceil(b.w+2*padding))),height:Math.max(1,Math.min(size.height-y,Math.ceil(b.h+2*padding)))});
+}
+async function enhanceSelection() {
+  if(activeJob || bubbleTask) return {error:'已有翻译任务正在进行，请稍候'};
+  if(editorWin) return {error:'请先完成或关闭单条编辑'};
+  const context=lastBatch;
+  if(!context || !context.success || !contexts.has(context.id)) return {error:'请先翻译当前选区'};
+  if(context.opts.source!=='ja') return {error:'加强 OCR 目前只支持日文选区'};
+  const selected=innerRect(selectionWin.getBounds());
+  if(stale || !sameRect(intersect(selected,context.capture.display.bounds),context.capture.rect))
+    return {error:'选区或画面已变化，请重新翻译选区'};
+  const candidates=[...context.regions.values()].map(raw=>{
+    const key=`${context.id}:${raw.id}`;
+    return {key,entry:results.get(key)};
+  }).filter(item=>item.entry);
+  if(!candidates.length) return {error:'当前选区没有可精读的气泡'};
+  if(candidates.length>100) return {error:'当前选区气泡过多，请缩小选区'};
+  const controller=new AbortController();bubbleTask=controller;
+  const savedGeneration=generation;
+  const progress=text=>{
+    if(generation===savedGeneration && lastBatch===context && !controller.signal.aborted) {
+      send(frameWin,'frame:status',{text});
+      send(context.overlay,'overlay:progress',{job:context.id,enhance:true,text});
+    }
+  };
+  const post=async(path,body,timeout)=>{
+    const response=await backend.request(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),
+      signal:AbortSignal.any([controller.signal,AbortSignal.timeout(timeout)])});
+    const data=await response.json();
+    controller.signal.throwIfAborted();
+    if(!response.ok) throw new Error(typeof data.detail==='string'?data.detail:'加强 OCR 失败，请重试');
+    return data;
+  };
+  try {
+    const staged=[];
+    for(const [index,{key,entry}] of candidates.entries()) {
+      progress(`正在精读气泡 ${index+1}/${candidates.length}…`);
+      const data=await post('/bubble/manga-ocr',{image:bubbleCrop(entry,context,16).toPNG().toString('base64'),source:'ja'},40000);
+      const text=typeof data.text==='string'?data.text.trim():'';
+      if(!text) throw new Error(`第 ${index+1} 条气泡未识别到文字，原有译文已保留`);
+      staged.push({key,entry,text,translated:entry.bubble.translated});
+    }
+    const changed=staged.filter(item=>item.text!==item.entry.bubble.text);
+    if(changed.length) {
+      progress(`已精读 ${candidates.length} 处，正在翻译 ${changed.length} 条更新的原文…`);
+      const data=await post('/selection/translate-texts',{texts:changed.map(item=>item.text),
+        source:'ja',target:context.opts.target,...settingsStore.credentials(context.opts.provider,context.opts.model)},120000);
+      if(!Array.isArray(data.items) || data.items.length!==changed.length)
+        throw new Error('翻译条数与精读原文不一致，请重试');
+      data.items.forEach((value,index)=>{
+        if(value.text!==changed[index].text || typeof value.translated!=='string' || !value.translated.trim())
+          throw new Error('翻译结果与精读原文不对应，请重试');
+        changed[index].translated=value.translated.trim();
+      });
+    }
+    const currentSelection=innerRect(selectionWin.getBounds());
+    if(generation!==savedGeneration || lastBatch!==context || editorWin || stale ||
+      !sameRect(intersect(currentSelection,context.capture.display.bounds),context.capture.rect) ||
+      candidates.some(({key,entry})=>results.get(key)!==entry))
+      throw new Error('气泡已变化，请重新翻译选区后再加强 OCR');
+    controller.signal.throwIfAborted();
+    const updated=[];
+    for(const item of changed) {
+      const {entry,text,translated}=item;
+      entry.raw={...entry.raw,text,translated};
+      entry.bubble={...entry.bubble,text,translated};
+      context.regions.set(entry.raw.id,entry.raw);
+      context.completed.set(entry.raw.id,entry.bubble);
+      updated.push(entry.bubble);
+    }
+    if(updated.length) send(context.overlay,'overlay:replace',updated);
+    return {count:candidates.length,changed:updated.length};
+  } catch(error) {
+    return {error:controller.signal.aborted?'已取消加强 OCR':error.name==='TimeoutError'?'加强 OCR 超时，请重试':error.message,
+      cancelled:controller.signal.aborted};
+  } finally {
+    send(context.overlay,'overlay:progress',null);
+    if(bubbleTask===controller) bubbleTask=null;
+  }
 }
 async function bubbleAction(key,kind,text) {
   if(activeJob || bubbleTask) return {error:'已有翻译任务正在进行，请稍候'};
   const controller=new AbortController();bubbleTask=controller;
   try {
     const {entry,context}=bubbleEntry(key),savedGeneration=generation;
-    const body=kind==='ocr'?{image:bubbleCrop(entry,context).toPNG().toString('base64'),source:context.opts.source}:{text,source:context.opts.source,target:context.opts.target,provider:context.opts.provider};
-    const response=await fetch(`${BACKEND_URL}/bubble/${kind}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.any([controller.signal,AbortSignal.timeout(60000)])});
+    const recognition=kind==='ocr'||kind==='manga-ocr';
+    const body=recognition?{image:bubbleCrop(entry,context,kind==='manga-ocr'?16:8).toPNG().toString('base64'),source:context.opts.source}:{text,source:context.opts.source,target:context.opts.target,...settingsStore.credentials(context.opts.provider,context.opts.model)};
+    const response=await backend.request(`/bubble/${kind}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.any([controller.signal,AbortSignal.timeout(kind==='manga-ocr'?40000:60000)])});
     const data=await response.json();controller.signal.throwIfAborted();
     if(!response.ok) throw new Error(typeof data.detail==='string'?data.detail:'单条处理失败，请检查原文后重试');
     if(generation!==savedGeneration || results.get(key)!==entry) throw new Error('这条译文已变化，请重新打开编辑');
-    if(kind==='ocr') return data;
+    if(recognition) return data;
+    if(data.text!==text) throw new Error('翻译返回的原文与当前气泡不一致，请重试');
     entry.bubble={...entry.bubble,text:data.text,translated:data.translated};entry.raw={...entry.raw,text:data.text,translated:data.translated};
     context.completed.set(entry.raw.id,entry.bubble);return {bubble:entry.bubble};
   } catch(error) {return {error:controller.signal.aborted?'已取消':error.message};}
@@ -289,44 +400,84 @@ function setReadingMode(value) {
   return {mode:readingMode};
 }
 
-ipcMain.handle('frame:lock',(_e,opts)=>runLock(opts));
-ipcMain.handle('frame:retry',()=>runLock(null,true));ipcMain.handle('frame:restore',restorePrevious);
-ipcMain.handle('frame:cancel',cancelJob);ipcMain.handle('frame:clear',clearAll);ipcMain.handle('frame:health',()=>waitForBackend());
+security.handle('frame:lock',(_e,opts)=>runLock(opts));
+security.handle('frame:retry',()=>runLock(null,true));security.handle('frame:restore',restorePrevious);
+security.handle('frame:enhance',enhanceSelection);
+security.handle('frame:cancel',cancelJob);security.handle('frame:clear',clearAll);security.handle('frame:health',()=>waitForBackend());
 function toggleReveal() {reveal=!reveal;broadcast('overlay:reveal',reveal);send(frameWin,'frame:reveal',reveal);return reveal;}
-ipcMain.handle('frame:reveal',toggleReveal);ipcMain.handle('frame:readingMode',(_e,value)=>setReadingMode(value));
-ipcMain.on('frame:preferences',(_e,prefs)=>{preferences=prefs;broadcast('overlay:preferences',prefs);send(selectionWin,'overlay:preferences',prefs);});
-ipcMain.on('frame:interact',(_e,value)=>{interactionLocked=Boolean(value);});
-ipcMain.handle('frame:getBounds',()=>selectionWin.getBounds());ipcMain.handle('frame:quit',()=>app.quit());
-ipcMain.on('frame:height',(_e,value)=>{
+security.handle('frame:reveal',toggleReveal);security.handle('frame:readingMode',(_e,value)=>setReadingMode(value));
+security.on('frame:preferences',(_e,prefs)=>{preferences=prefs;broadcast('overlay:preferences',prefs);send(selectionWin,'overlay:preferences',prefs);});
+security.on('frame:interact',(_e,value)=>{interactionLocked=Boolean(value);});
+security.handle('frame:getBounds',()=>selectionWin.getBounds());security.handle('frame:quit',()=>app.quit());
+security.handle('frame:configuration',()=>{
+  if(settingsWin && !settingsWin.isDestroyed()) {settingsWin.show();settingsWin.focus();return;}
+  if(editorWin) throw new Error('请先关闭单条编辑，再打开 翻译AI配置');
+  const work=screen.getDisplayMatching(frameWin.getBounds()).workArea;
+  settingsWin=new BrowserWindow({width:Math.min(620,work.width),height:Math.min(740,work.height),
+    parent:frameWin,modal:true,show:false,frame:false,resizable:false,autoHideMenuBar:true,
+    backgroundColor:'#f2f5fb',title:'翻译AI配置 · Inazuma',
+    webPreferences:{preload:path.join(__dirname,'settings-preload.cjs'),...webPreferences}});
+  settingsWin.setAlwaysOnTop(true,'screen-saver');
+  settingsWin.once('ready-to-show',()=>{if(settingsWin && !app.commandLine.hasSwitch('smoke-test')) settingsWin.show();});
+  settingsWin.on('closed',()=>{settingsWin=null;});
+  security.protectWindow(settingsWin,'settings',path.join(__dirname,'renderer/settings.html'));
+  settingsWin.loadFile(path.join(__dirname,'renderer/settings.html'));
+});
+function settingsSender(event) {
+  if(!settingsWin || event.sender!==settingsWin.webContents) throw new Error('设置窗口已关闭，请重新打开');
+}
+security.handle('settings:load',event=>{settingsSender(event);return settingsStore.summary();});
+security.handle('settings:save',(event,data)=>{
+  settingsSender(event);
+  if(activeJob || bubbleTask) return {error:'请等待当前翻译完成，或取消翻译后再保存设置'};
+  try {
+    const settings=settingsStore.save(data);
+    send(frameWin,'settings:changed',settings);
+    return {settings};
+  } catch(error) {return {error:error.message};}
+});
+security.handle('settings:models',async(event,data)=>{
+  settingsSender(event);
+  try {return await settingsStore.syncModels(data);} catch(error) {return {error:error.message};}
+});
+security.handle('settings:close',event=>{settingsSender(event);settingsWin.close();});
+security.on('frame:height',(_e,value)=>{
   if(!frameWin || !Number.isFinite(value)) return;
   const b=frameWin.getBounds(),work=screen.getDisplayMatching(b).workArea,height=Math.max(150,Math.min(Math.ceil(value),work.height));
-  frameWin.setBounds({x:Math.max(work.x,Math.min(b.x,work.x+work.width-b.width)),y:Math.max(work.y,Math.min(b.y,work.y+work.height-height)),width:b.width,height});
+  // getBounds() encloses physical pixels in DIP; at 125% it may report +1.
+  // Never feed that rounded width back on each selection-state update.
+  if(Math.abs(b.width-TOOLBAR_WIDTH)<=1 && Math.abs(b.height-height)<=1) return;
+  frameWin.setBounds({x:Math.max(work.x,Math.min(b.x,work.x+work.width-TOOLBAR_WIDTH)),y:Math.max(work.y,Math.min(b.y,work.y+work.height-height)),width:TOOLBAR_WIDTH,height});
 });
-ipcMain.handle('frame:recenter',()=>{
+security.handle('frame:recenter',()=>{
   const p=screen.getCursorScreenPoint(),work=screen.getDisplayNearestPoint(p).workArea,b=selectionWin.getBounds(),width=Math.min(b.width,work.width),height=Math.min(b.height,work.height);
   selectionWin.setBounds({x:Math.round(Math.max(work.x,Math.min(p.x-width/2,work.x+work.width-width))),y:Math.round(Math.max(work.y,Math.min(p.y-height/2,work.y+work.height-height))),width,height});
 });
-ipcMain.handle('frame:resizeTo',(_e,x,y,w,h,anchor='se')=>{
+security.handle('frame:resizeTo',(_e,x,y,w,h,anchor='se')=>{
   if(![x,y,w,h].every(Number.isFinite)) return;
   const work=screen.getDisplayMatching(selectionWin.getBounds()).workArea,width=Math.round(Math.max(MIN_SIZE,Math.min(w,work.width))),height=Math.round(Math.max(MIN_SIZE,Math.min(h,work.height)));
   if(anchor.includes('w')) x+=w-width;if(anchor.includes('n')) y+=h-height;
   selectionWin.setBounds({x:Math.round(x),y:Math.round(y),width,height});
 });
-ipcMain.handle('bubble:inspect',(_e,key)=>{
+security.handle('bubble:inspect',(_e,key)=>{
   try {const {entry,context}=bubbleEntry(key);return {text:entry.bubble.text,translated:entry.bubble.translated,image:bubbleCrop(entry,context).toDataURL(),...context.opts};}
   catch(error) {return {error:error.message};}
 });
-ipcMain.handle('bubble:ocr',(_e,key)=>bubbleAction(key,'ocr'));ipcMain.handle('bubble:translate',(_e,data)=>bubbleAction(data.key,'translate',data.text));
-ipcMain.on('bubble:dismiss',(_e,key)=>{results.delete(key);});
-ipcMain.on('overlay:editor',(event,value)=>{
+security.handle('bubble:ocr',(_e,key)=>bubbleAction(key,'ocr'));security.handle('bubble:manga-ocr',(_e,key)=>bubbleAction(key,'manga-ocr'));security.handle('bubble:translate',(_e,data)=>bubbleAction(data.key,'translate',data.text));
+security.on('bubble:dismiss',(_e,key)=>{results.delete(key);recoveryState();});
+security.on('overlay:editor',(event,value)=>{
   const win=BrowserWindow.fromWebContents(event.sender);
   if(value) {editorWin=win;win.setIgnoreMouseEvents(false);win.focus();}
   else if(editorWin===win) {editorWin=null;bubbleTask?.abort();}
 });
-ipcMain.on('win:hitRegions',(event,regions)=>{const state=mouseStates.get(BrowserWindow.fromWebContents(event.sender));if(state) state.regions=regions.slice(0,400);});
-ipcMain.on('win:dragging',(event,value)=>{const state=mouseStates.get(BrowserWindow.fromWebContents(event.sender));if(state) state.dragging=Boolean(value);});
-ipcMain.on('glass:regions',(event,regions)=>glassCapture.regions(BrowserWindow.fromWebContents(event.sender),regions));
+security.on('win:hitRegions',(event,regions)=>{const state=mouseStates.get(BrowserWindow.fromWebContents(event.sender));if(state) state.regions=regions.slice(0,400);});
+security.on('win:dragging',(event,value)=>{const state=mouseStates.get(BrowserWindow.fromWebContents(event.sender));if(state) state.dragging=Boolean(value);});
+security.on('glass:regions',(event,regions)=>glassCapture.regions(BrowserWindow.fromWebContents(event.sender),regions));
 function updateMouse() {
+  if(settingsWin && !settingsWin.isDestroyed()) {
+    for(const [win,state] of mouseStates) if(!state.ignore) {win.setIgnoreMouseEvents(true,{forward:true});state.ignore=true;}
+    return;
+  }
   const point=screen.getCursorScreenPoint(),tb=frameWin?.getBounds(),sb=selectionWin?.getBounds();
   const overToolbar=tb && frameWin.isVisible() && contains(tb,point),insideSelection=sb && selectionWin.isVisible() && contains(sb,point);
   const corner=insideSelection && (point.x<sb.x+16 || point.x>=sb.x+sb.width-16) && (point.y<sb.y+16 || point.y>=sb.y+sb.height-16);
@@ -351,7 +502,17 @@ function updateMouse() {
     state.motion={...local,wx:b.x,wy:b.y};
   }
 }
-app.whenReady().then(()=>{
+app.whenReady().then(async()=>{
+  settingsStore=createSettingsStore({file:path.join(app.getPath('userData'),'ai-settings.json'),safeStorage,
+    legacyFiles:[process.env.MWT_ENV_FILE || (app.isPackaged ? path.join(app.getPath('userData'),'settings.env.txt') : path.join(__dirname,'.env'))]});
+  if(!process.env.MWT_BACKEND_PORT) {
+    // Each installed instance owns its backend; never borrow a development
+    // server's credentials or terminate another instance's service on exit.
+    BACKEND_PORT=await new Promise((resolve,reject)=>{
+      const server=require('node:net').createServer();server.once('error',reject);
+      server.listen(0,'127.0.0.1',()=>{const port=server.address().port;server.close(()=>resolve(port));});
+    });
+  }
   startBackend();createWindows();cursorTimer=setInterval(updateMouse,40);watchTimer=setInterval(watchSelection,850);
   if(experimentalGlassCapture) glassTimer=setInterval(()=>glassCapture.tick(),150);
   globalShortcut.register('CommandOrControl+Shift+T',()=>send(frameWin,'frame:hotkeyLock'));
@@ -359,5 +520,9 @@ app.whenReady().then(()=>{
   screen.on('display-removed',(_event,display)=>{clearAll();overlays.get(String(display.id))?.close();});
   screen.on('display-metrics-changed',(_event,display)=>{clearAll();overlays.get(String(display.id))?.setBounds(display.bounds);});
 });
-app.on('before-quit',()=>{cancelJob();clearInterval(cursorTimer);clearInterval(watchTimer);clearInterval(glassTimer);glassCapture.dispose();globalShortcut.unregisterAll();backendProc?.kill();});
+app.on('before-quit',()=>{
+  cancelJob();clearInterval(cursorTimer);clearInterval(watchTimer);clearInterval(glassTimer);
+  glassCapture.dispose();globalShortcut.unregisterAll();
+  backend?.close();
+});
 app.on('window-all-closed',()=>app.quit());

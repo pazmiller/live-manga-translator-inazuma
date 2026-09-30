@@ -1,0 +1,7 @@
+torch==2.14.0
+manga-ocr==0.1.16
+transformers==5.17.0
+setuptools==84.0.0
+tokenizers==0.23.2
+huggingface-hub==1.33.0
+safetensors==0.8.0

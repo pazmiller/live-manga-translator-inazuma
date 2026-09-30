@@ -2,8 +2,6 @@ rapidocr==3.9.2
 onnxruntime==1.30.0
 fastapi==0.141.1
 uvicorn==0.53.0
-deep-translator==1.11.4
 pillow==12.3.0
 numpy==2.5.3
-anthropic==1.7.0
 openai==3.16.2

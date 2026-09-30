@@ -1,3 +1,4 @@
+import os
 import base64
 import io
 import json
@@ -5,7 +6,8 @@ import sys
 import threading
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import MagicMock, Mock, patch
 
 import numpy as np
 from PIL import Image
@@ -90,6 +92,27 @@ class TranslationTests(unittest.TestCase):
                 parser.feed(raw)
                 parser.finish(2)
 
+    def test_deepseek_response_must_match_each_source(self):
+        def response(items):
+            payload = json.dumps(items, ensure_ascii=False)
+            chunks = [payload[i:i+7] for i in range(0, len(payload), 7)]
+            stream = MagicMock()
+            stream.__iter__.return_value = iter(SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content=part))]) for part in chunks)
+            client = Mock()
+            client.chat.completions.create.return_value = stream
+            return client
+
+        # Two similar opening lines from the reported page must keep their own identity.
+        texts = ["ち違くてその…", "い、いやこれは…"]
+        valid = [{"index": 0, "source": texts[0], "translation": "one"},
+                 {"index": 1, "source": texts[1], "translation": "two"}]
+        with patch.object(translate, "_deepseek_client", return_value=response(valid)):
+            self.assertEqual(list(translate._deepseek_stream(texts, "ja", "zh-CN")), ["one", "two"])
+        swapped = [{**valid[0], "source": texts[1]}, {**valid[1], "source": texts[0]}]
+        with patch.object(translate, "_deepseek_client", return_value=response(swapped)):
+            with self.assertRaisesRegex(translate.TranslationError, "对应"):
+                list(translate._deepseek_stream(texts, "ja", "zh-CN"))
+
     def test_failed_batch_is_not_cached(self):
         def failed(*_):
             yield "first"
@@ -117,14 +140,17 @@ class TranslationTests(unittest.TestCase):
 
 class EndpointTests(unittest.TestCase):
     def setUp(self):
-        from fastapi.testclient import TestClient
+        from backend_test_support import authenticated_client
         import server
+        credentials = patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-placeholder"})
+        credentials.start()
+        self.addCleanup(credentials.stop)
         self.server = server
         server._ocr_cache.clear()
-        self.client = TestClient(server.app)
+        self.client = authenticated_client(server)
         buffer = io.BytesIO()
         Image.new("RGB", (100, 100), "white").save(buffer, format="PNG")
-        self.payload = dict(image=base64.b64encode(buffer.getvalue()).decode(), provider="google")
+        self.payload = dict(image=base64.b64encode(buffer.getvalue()).decode(), provider="deepseek")
 
     def tearDown(self):
         self.client.close()

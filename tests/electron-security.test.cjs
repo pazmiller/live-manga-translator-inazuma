@@ -1,0 +1,31 @@
+const {test}=require('node:test');
+const assert=require('node:assert/strict');
+const {EventEmitter}=require('node:events');
+const {pathToFileURL}=require('node:url');
+const {createSecurity}=require('../electron-security.cjs');
+test('IPC requires a registered window, its main frame, exact URL, role and valid arguments',()=>{
+  const handles=new Map(), listeners=new Map();
+  const security=createSecurity({handle:(k,v)=>handles.set(k,v),on:(k,v)=>listeners.set(k,v)});
+  const win=new EventEmitter(), contents=new EventEmitter();win.webContents=contents;
+  contents.session={setPermissionCheckHandler:()=>{},setPermissionRequestHandler:()=>{}};
+  contents.setWindowOpenHandler=()=>{};contents.isDestroyed=()=>false;
+  const file=require('node:path').resolve('renderer/selection.html');
+  contents.mainFrame={url:pathToFileURL(file).href};
+  const event={sender:contents,senderFrame:contents.mainFrame};
+  security.protectWindow(win,'selection',file);
+  const args=[10,20,400,300,'se'];
+  assert(security.allowed('frame:resizeTo',event,args));
+  for(const bad of [[NaN,20,400,300,'se'],[10,20,-1,300,'se'],[10,20,400,300,{}]])
+    assert(!security.allowed('frame:resizeTo',event,bad));
+  assert(!security.allowed('frame:quit',event,[]));
+  assert(!security.allowed('frame:getBounds',{...event,senderFrame:{...contents.mainFrame}},[]));
+  assert(!security.allowed('frame:getBounds',{...event,sender:{}},[]));
+  contents.mainFrame.url+='?spoof';assert(!security.allowed('frame:getBounds',event,[]));
+  contents.mainFrame.url=pathToFileURL(file).href;
+  security.handle('frame:getBounds',()=>42);
+  assert.equal(handles.get('frame:getBounds')(event),42);
+  assert.throws(()=>handles.get('frame:getBounds')(event,'extra'),/Blocked IPC/);
+  security.on('win:hitRegions',()=>assert.fail('malformed send reached handler'));
+  assert.doesNotThrow(()=>listeners.get('win:hitRegions')(event,null));
+  win.emit('closed');assert(!security.allowed('frame:getBounds',event,[]));
+});

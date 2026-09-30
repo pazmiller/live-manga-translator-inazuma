@@ -9,11 +9,12 @@ process.env.MWT_BACKEND_PORT='18779';
 let captures=0;
 desktopCapturer.getSources=async()=>{captures++;return [];};
 require('node:child_process').spawn=()=>{throw Error('Unexpected backend spawn');};
-global.fetch=async()=>Response.json({service:'manga-window-translator',protocol:3,ocr:'ready',providers:{}});
+global.fetch=async()=>Response.json({service:'manga-window-translator',protocol:4,ocr:'ready',providers:{}});
 const ignore=BrowserWindow.prototype.setIgnoreMouseEvents;
 BrowserWindow.prototype.setIgnoreMouseEvents=function(){return ignore.call(this,true,{forward:true});};
 BrowserWindow.prototype.focus=function(){};
 app.on('browser-window-created',(_,win)=>{win.setFocusable(false);win.setIgnoreMouseEvents(true);});
+require('./mock-backend.cjs')();
 require('../main');
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 app.whenReady().then(async()=>{

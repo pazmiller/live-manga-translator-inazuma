@@ -1,4 +1,139 @@
-﻿## 2026-09-26 统一 validator
+## 2026-09-29 移动选区导致工具栏变宽 / 系统截图缺少 UI
+
+在 125% Windows 缩放下复现：原生移动工具栏到非整数 DIP 像素位置后，再反复移动翻译选区，selection change → recoveryState → renderer reportLayout → frame:height，把 getBounds 向外取整后的宽度写回，工具栏从 680 累积至 793。`frame:height` 现在使用固定 TOOLBAR_WIDTH=680，尺寸相差不超过 1 DIP 时不重设 bounds，消除反馈；同一复现保持 680/681。独立 AI 配置窗口在此场景中尺寸保持不变。调试复现脚本保留于忽略目录 `.qa/bounds-*.cjs`。
+
+截图 UI 缺失来自之前 trackMouse 永久 setContentProtection(true)，与新 CSP/IPC 保护无关。默认不再永久排除窗口；连续阅读的预览采样才短暂设置排除并 finally 恢复，普通翻译仍沿用隐藏 → 截图 → finally 显示。仅显式实验 MWT_GLASS_CAPTURE=1 保留永久排除以避免光学镜像。采样期间系统截图仍可能碰到短暂排除时段。
+
+新增 window-lifecycle.cjs 与 native-window-state.ps1：真实 Windows SWP_NOSIZE 移动窗口，验证工具栏无累积变化、独立配置窗口不变、GetWindowDisplayAffinity 的初始/失败后状态、watch 采样排除和普通翻译失败后显示恢复。纳入 validate。renderer-smoke 的独立窗口明确 x/y=24、transparent=true、resizable=false，与应用一致；原不透明且可缩放的测试窗口在当前 125% 缩放下返回 682 宽，对齐配置后通过，未放宽宽度断言。此次没有重新打包或提交。
+
+最终 `npm run validate` 全部 9 阶段 PASS，报告 `.qa/validation/latest.json`。原生移动回归为 680×200 → 681×201 DIP（像素取整，无累积增长），配置窗口保持不变，截图排除标记成功恢复。未人工运行 Snipping Tool，未覆盖混合 DPI 多屏或实验截图折射；真实 Windows 截图排除标记和受控捕获失败路径已验证。本轮改动及直接调用点冗余审查完成，无新增安全清理提案。
+
+## 2026-09-29 Electron 窗口与 IPC 保护
+
+新增 `electron-security.cjs`，四类窗口明确开启 sandbox/contextIsolation/webSecurity，关闭 Node integration、webview 和不安全内容。窗口加载前登记角色和精确文件 URL；全部 IPC 经统一策略表验证注册窗口、主 frame、URL、角色及参数类型/长度/坐标范围。未知策略不能注册，非法 invoke 拒绝，非法 send 丢弃。每个 session 拒绝 renderer 权限申请，截图仍由主进程执行。全部窗口阻止导航、重定向、弹窗及 webview 附加。
+
+四个 HTML 均配置 CSP：只允许本地脚本，禁止内联脚本、eval、renderer 网络请求、iframe、object 和表单提交。气泡/选区/工具栏保留动态内联样式以支持布局和玻璃效果；设置窗口保留更严格的 style-src self。翻译和模型同步仍经主进程，不受 connect-src none 影响。两种构建都会包含新增安全模块。尚未改成自定义资源协议或配置发行版 fuses，不能据此宣称已消除全部安全风险。
+
+验证：`npm run validate` 全部 8 阶段通过，包括 29 项 Node、48 项 Python、UI/设置/真实认证流程/安全拦截/原生输入/GPU 响应。安全测试实际启动 Electron，验证错误角色、相同页面但未登记窗口、内联脚本、外网请求、通知权限、弹窗及导航拒绝；单元测试补充子 frame、错误 URL、畸形参数和关闭窗口。响应测试 35 次调整尺寸，主进程心跳最大延迟 16 ms；这不是所有电脑上的性能保证。翻译端到端使用固定 OCR/provider 数据，无付费调用。未重建 dist 安装包、未提交。
+
+冗余审查：本轮修改文件与 preload/renderer/build 调用点已检查。唯一清理提案：`main.js` 的 `settingsSender` 与统一 IPC 来源保护重复，未来可移除该函数及四处调用，以减少维护；须重跑 settings-ui 和安全来源测试。风险为失去专用“窗口已关闭”错误提示，因此本轮保留，未擅自清理。HTML 的 CSP 重复是 file 页面独立生效所需，保留。
+
+## 2026-09-29 本地后端身份验证与接口认证
+
+新增 `backend-client.cjs`、`backend-service.cjs`、`backend/local_auth.py`。每次应用启动生成 32-byte 随机秘密，经 Python stdin 管道传递；不经 argv/env/文件/renderer。开发与安装模式都默认随机端口并启动自己的 worker；不再凭旧 `/health` 复用已有服务。每条新连接先校验随机挑战的 HMAC，再限定同一 socket 发送业务请求；避免验证后自动重连时把 API Key 发给替换服务。所有业务接口验证派生的 client token，验证在读取请求体前执行；浏览器 Origin 请求拒绝，未配置密钥的 app 默认 503。主进程所有整页/单泡/加强 OCR 调用统一走认证客户端，错误中英文可显示。没有增加用户配置或登录。
+
+测试：新增 Node 假后端、跨会话、替换连接、流式及取消测试；Python 覆盖全部接口、挑战与 request body 前置拒绝；`backend-auth-ui.cjs` 使用真实 Electron/Python/管道/HTTP，固定 OCR 和翻译数据验证按钮翻译、流式气泡、编辑保存、加强 OCR 和清除。`node tests/backend-auth-live.cjs` 验证实际 RapidOCR 和 401 拒绝，识别 66 字符，10 次认证 health 均值 3.3 ms（包含本地 HTTP，不是纯加密耗时）。两种 OCR 的实际离线预热测试通过。付费翻译未调用。
+
+`npm run validate` 已加入 Python 回归与真实认证 UI 流程；旧 UI 单测用显式 service mock，生产代码无测试免认证开关。原生输入测试 PowerShell 增加 DPI awareness，修复物理坐标被虚拟化导致标题命中错误；窗口宽度断言容许 Windows 一 DIP 的取整误差。`benchmark.py` 与成品测试均适配认证；成品测试先单独验证自己启动的 bundled worker，再通过应用 IPC 验证应用自己的 worker，不读取应用会话密钥。
+
+最终 `npm run validate` 全部 7 个阶段 PASS（28 项 Node、48 项 Python，以及布局、设置、认证 UI、原生输入、GPU 响应验证），报告 `.qa/validation/latest.json`。`git diff --check` 和新增 Python 脚本语法检查通过。认证相关新增/修改文件及调用点已做冗余检查，无安全清理提案。成品测试本轮只完成代码适配和语法检查，未对旧 EXE 运行或宣称通过。
+
+打包配置已包含两个新增 Node 模块，Python 静态导入会收集 local_auth。本轮没有重建 `dist/` 的两个 1.1.0 EXE，因此下面旧安装包的测试和 hash 不代表已包含本保护；发布前必须重新构建并运行成品测试。此前安全审查的依赖升级、Electron 窗口/CSP/IPC 加固和代码签名仍是单独待办。
+
+---
+
+## 2026-09-29 Windows 1.1.0 MangaOCR 完整版
+
+新增 `npm run dist:win:manga`，生成 `dist/mangaocr/Inazuma-MangaOCR-Setup-1.1.0-x64.exe`，784448940 bytes（约 748 MiB），展开约 1.72 GiB。标准版文件 SHA256 保持不变。完整版 appId 后缀 `.mangaocr`，产品名 Inazuma MangaOCR；内置 PyInstaller 独立 Manga OCR worker、Python 3.10、torch 2.6.0+cpu、transformers 4.57.6、manga-ocr 0.1.16、fugashi/unidic-lite 和固定模型快照 aa6573bd10b0d446cbf622e29c3e084914df9741。无需用户安装 Python 或联网下载模型。CPU 模式强制启用，翻译 API 仍联网。
+
+打包后 server 从 resources/manga-ocr 查找独立 exe；开发版继续使用原虚拟环境和脚本。MangaWorker 允许 script=None 直接运行 exe。冻结 worker 在导入 transformers 前设置 HF_HUB_OFFLINE/TRANSFORMERS_OFFLINE，并只加载内置模型路径。标准版无 bundled worker 时仍显示模型未安装。`scripts/build-manga.py` 本地离线读取固定快照并收集动态导入；首次构建需提前缓存该快照，详见 README。
+
+42 项 Python 回归通过。实际静默安装至 `.qa/installed-mangaocr-1.1.0` 后运行成品测试，通过空缓存/离线/no Python PATH 下 Manga OCR 两次识别（包含预期“一緒に行こう”），预热后 199 / 160 ms；普通四种 OCR、三家配置 IPC、中英文切换、退出及后端清理通过。成品无开发者密钥，测试安装已卸载。证据 `.qa/installed-smoke-1hDA1o`，未安装目录成品证据 `.qa/installed-smoke-NKwLFn`。未调用真实付费 API，未做干净 Windows VM 验证。
+
+SHA256 `a4ab030c8529ffc3bede63c2c824b571b8ff85ffe1b90e14c0d833e19175a3ea`，同目录 `.sha256` 文件。已核对 GitHub 官方 Release 单文件小于 2 GiB 限制，当前安装包可直接上传，无需分卷。未上传 Release，未 commit/tag/push 本轮打包改动。
+
+---
+
+## 2026-09-29 Windows 1.1.0 标准安装包
+
+`package.json` 和 lockfile 版本更新为 1.1.0，无自动 tag/commit/push。生成 `dist/Inazuma-Setup-1.1.0-x64.exe`（224884011 bytes，约 214 MiB），同目录提供 SHA256 文件；旧 1.0.0 安装包保留。修复 PyInstaller `--specpath .build` 导致 provider-catalog.json 相对路径错误：`--add-data` 改用仓库绝对路径。安装版包含三家 AI 配置与中英文界面，标准包不内置可选 Manga OCR 环境/模型。
+
+实际静默安装至项目专用 `.qa/installed-inazuma-1.1.0`，运行 `node tests/packaged-smoke.cjs .qa/installed-inazuma-1.1.0/Inazuma.exe` 通过：PATH 只保留 System32，内置日文 OCR 返回 66 字，英/中/韩引擎调用成功，protocol 4、全部 provider 初始无密钥、清除、语言切换、设置窗口真实 preload/IPC 返回三家目录、退出和后端结束均验证。无付费翻译调用；这些样本仅证明各 OCR 引擎可运行，不代表全部语言准确率。证据 `.qa/installed-smoke-dKnC5I`。asar 版本 1.1.0 且不含 .env / ai-settings.json / settings.env.txt。安装包未签名，未做干净 Windows VM 或实体多屏测试。
+
+---
+
+## 2026-09-29 中英文界面切换
+
+工具栏和设置窗口新增 EN / 中文按钮，同步切换现有窗口并记忆下次启动的语言。共用 `renderer/i18n.js`：明确限定系统 UI 区域，按词典与动态数字模式本地化文本及 title/aria-label/placeholder，WeakMap 保留原中文以便还原；只处理 DOM 变化，不轮询、不发出翻译请求。localStorage `inazuma-ui-language` 持久化，storage 事件同步其他窗口。漫画 `.copy`、编辑器译文/原文值、模型输入、密钥值不本地化。新增界面文案需同时维护词典，未知文案保留原文；服务商原始英文错误不额外改写。
+
+英文下语言选择控件加宽，工具栏拖动说明隐藏以保留空间，编辑器底部操作可换行。真实 Electron 设置集成测试覆盖英文翻译按钮及请求路由、动态进度/错误、跨窗口双向切换、重载和新窗口记忆、英文布局，以及把“原文”“清除”用作漫画内容验证不会误翻译。已查看工具栏、设置窗口和气泡编辑器英文截图。完整 `npm run validate` 通过，翻译接口均模拟，未调用付费服务；冗余审计无安全清理建议。开发版需重启一次加载本改动，旧安装包需重建。
+
+---
+
+## 2026-09-29 应用内 AI 设置
+
+工具栏“配置密钥”已改成“AI 设置”，打开独立简洁窗口，提供 OpenAI / Gemini / DeepSeek 三家服务商、近期模型预设、自定义模型 ID、API Key 显示/隐藏和模型同步。官方 URL 自动匹配，保存后下一次翻译立即生效，无需重启。各服务商分别记忆配置；空密钥沿用保存值。普通用户不必编辑 `.env`。目录 `backend/provider-catalog.json` 供 Node/Python 共用，预设依据官方更新记录核对至 2026-09-29，覆盖近三个月；同步使用官方兼容接口 `/models`，筛选文本模型，日期未知的不虚称最近发布。同步只查询模型列表，不证明每个模型都有调用权限。
+
+`settings-store.cjs` 通过 Electron safeStorage / Windows DPAPI 将密钥加密保存到用户数据目录 `ai-settings.json`，界面只能取得 hasKey，旧配置从开发 `.env` / 安装版 `settings.env.txt` 兼容读取，保存时写入加密文件，原明文文件不变。配置通过设置窗口专用 preload/IPC 保存，主进程注入后端请求；原气泡编辑、补译、加强 OCR 保留原任务 provider/model，使用该 provider 当前保存的 key。翻译期间禁止保存配置。后端 protocol 4，三家兼容流式 Chat Completions 共用原文/编号对应校验；缓存区分服务商、模型和密钥摘要。Google/Claude 的旧后端接口暂保留兼容，UI 不再开放。
+
+`npm run validate` 五组通过（含 23 项 Node 测试和新增 AI 设置集成）；40 项 Python 测试通过。真实 Electron 窗口 + preload + IPC + 系统加密测试覆盖三家选择/保存后翻译路由、模型同步/401 失败、自定义名称、重新打开留空保留密钥、取消和小窗口错误可见性，已查看常规/小窗口/错误截图。`npm run test:manga:ui` 真实本地 Manga OCR + 模拟翻译通过，编辑精读约 338 ms；该测试改用隔离端口 18768 和假 key，不借用用户运行中的服务或密钥。未调用三家真实付费翻译、未做系统鼠标人工验收。构建清单已包含设置文件及 Python 模型目录 JSON，但本轮未重新构建安装包，旧 exe 不含本次改动。
+
+开发版需退出并重新 `npm start` 一次加载新代码，之后配置变更无需重启。README / `.env.example` 已更新。相关改动与调用点已做冗余审计，未发现可安全移除的新增冗余；旧服务商兼容分支保留。未 commit / push；原有未跟踪 `.vscode/` 未改动。
+
+---
+
+## 2026-09-28 整选区加强 OCR
+
+用户希望在“翻译选区”下方直接出现“加强 OCR”，一次对当前整个选区运行此前的日漫精读，不必逐个打开气泡编辑。现于日文选区成功翻译、选区位置未变且有可见气泡时显示按钮；点击后复用保存截图和普通 OCR 的气泡框，逐框调用常驻 Manga OCR，只批量重译原文发生变化的气泡，全部成功且气泡身份未变才一次性更新覆盖层。中途 OCR 为空、翻译原文/数量不匹配、关闭气泡、清除或移动选区均不留下半页新结果。普通 OCR 完全漏掉的气泡仍无法精读；旧单条精读保留用于人工修正。DeepSeek/Google 的文本批量译文走新 `/selection/translate-texts`，Claude 文本模式逐条译，均不发送截图给翻译服务。
+
+完整 Electron 真实本地 Manga OCR + 第二气泡模拟 OCR + 模拟翻译测试：工具栏鼠标点击、两条气泡、第一次批量译文故意错配时旧译文均保留、重试后两条原文及译文按原 ID 更新、单条编辑仍正常。37 项 Python 测试、`npm run test:ui`、`npm run test:manga:ui`、`npm run validate` 通过。真实付费批量翻译未调用；用户之前只授权一次截图单句 DeepSeek 调用，不应扩大为本轮真实外发。此次测试发现 Electron 窗口加载时多条事件各占一个 `did-finish-load` 监听导致告警，已改为单监听按序发送并重跑通过。开发版需重启，旧安装包不含本改动。
+
+---
+
+## 2026-09-28 气泡原文与译文对应关系
+
+用户截图显示编辑第 2 条气泡，截图和精读草稿是「ち違くてその…」，下方旧译文是「不，不是啦，那个…」；用户反馈首次整页和单条保存都曾出现翻到另一气泡的情况，并补充另一气泡原文「い、いやこれは…」。两句意思接近，单凭此截图不能证实错配：经用户明确授权，仅将第一句向已配置 DeepSeek 发一次，`/bubble/translate` 回传相同原文和「不、不是那样的，那个……」，语义与截图接近。未发送整页或其他气泡，也未进行第二次外部调用。此前自动审批因缺少明确授权拒绝过第一句的外发；授权后才执行。
+
+代码审查确认整页 DeepSeek 以前只要求位置顺序相同的字符串数组；数量校验通过时，无法检查译文究竟对应哪个原文。本地模拟测试先失败，现将响应改为包含 `index`、逐字复制的 `source` 和 `translation` 的对象数组，流式逐条验证编号和源文；错配时报错，不展示或缓存错误译文。单条保存也在 Electron 主进程校验后端回传 `text` 等于提交的原文，不一致不覆盖现有气泡。DeepSeek 单句真实调用通过新响应格式；批量格式只经本地模拟，尚未进行真实外部批量调用。
+
+精读或手动修改原文后，编辑窗口原先仍标“当前译文”，实际上那是旧译文。现在明确标“上次译文（原文已改，尚未重新翻译）”，直到点击“翻译并保存”成功。完整 Electron + 本地 Manga OCR + 模拟单条翻译测试验证：另一气泡的错误原文响应被拒绝，正确原文响应保存成功。36 项 Python 测试、`npm run test:ui`、`npm run validate` 通过。模型仍有可能在正确复制 `index` / `source` 的同时产生语义相近但不精确的译文；不能据此宣称所有语义错配都可自动识别。开发版需退出重启；旧安装包仍未包含这些修改。
+
+---
+
+## 2026-09-27 日漫精读按钮持续显示等待光标：进一步诊断
+
+用户反馈上一轮修复后仍无法点击。本机正在运行的开发版后端 `8765` 显示 RapidOCR 和 Manga OCR 都为 `ready`；向同一后端发送保存气泡截图，约 0.206 秒返回。因此当前现象并非模型本身一直加载。上一版编辑器仍把异步健康检查结果作为按钮启用条件；如该 IPC 长时间未返回，按钮就一直禁用，而且通用 `button:disabled { cursor:wait }` 会显示误导性的等待光标。
+
+本轮改为：按钮除正在处理请求外始终可点击，不再等待健康检查；源语言不符、截图失效、模型未安装或启动失败时，点击后直接给出原因；模型尚在后台加载时，点击会快速返回“稍候重试”。禁用按钮不再使用误导性的等待光标。新增 `tests/manga-ui-live.cjs`，完整 Electron 主进程 + preload + 编辑窗口 + 指针事件 + 已保存截图 + 真实本地 Manga OCR，翻译服务用测试桩避免付费调用；本机约 0.33 秒写回原文草稿。慢健康检查及非日语／无模型的 UI 回归也验证按钮响应。35 项 Python 单测、`npm run test:ui`、完整 `npm run validate` 和隔离应用从零启动测试通过。用户当前运行的窗口不会自动热重载，必须退出再启动才能载入新前端。尚未取得用户对其具体“载入 logo”位置的描述，也未直接观察用户桌面窗口；不能把真实桌面问题宣称已完全复现。
+
+---
+
+## 2026-09-27 日漫精读载入卡住与双 OCR 预热
+
+编辑窗口原先用 `Promise.all(读取气泡, 后端健康检查)`，健康检查可等待后端最多 60 秒，期间原文和按钮都被禁用；Manga OCR 每点一次还会重新启动 Python 和加载模型。现改为先读取并开放气泡编辑，模型状态异步查询，加载时只禁用“日漫精读”并说明原因；识别进行时显示实际等待秒数。普通 RapidOCR 原本已在后端启动时预热日文模型，现可选 Manga OCR 也在启动时后台预热并常驻独立进程，健康接口提供 `manga_ocr_state`。应用退出按进程树清理后端与模型；模型未安装时普通 OCR 照常可用。其他语言的 RapidOCR 模型仍按首次使用加载，缓存上限两个语言。安装包仍未包含 Manga OCR 可选依赖，需重新构建才会包含本次代码改动。
+
+真实保存气泡截图走 HTTP 对照：原来第二张 Manga OCR 每次约 7.8 秒，现在预热后的第二张 0.254 秒，第一张与预热并发时 5.059 秒；RapidOCR 分别为 3.204 / 0.488 秒。隐藏的完整 Electron 应用从启动到两种模型就绪约 9.5 秒，退出后无残留 Manga OCR 进程或测试端口。35 项 Python 测试、Electron UI 点击与慢健康检查回归、`npm run validate` 全部通过。UI 测试用隐藏窗口模拟指针事件，未在用户当前桌面做人工鼠标验收；真实截图测试不调用翻译服务。
+
+---
+
+## 2026-09-27 日漫精读按钮可见性修复
+
+用户在编辑窗口找不到“日漫精读”。运行中实际开发版和后端健康检查均为新版且 `manga_ocr=true`；根因是编辑器把按钮按气泡保存时的源语言和健康检查结果直接隐藏，用户无从得知缺少哪项条件。添加失败后转通过的 Electron 编辑窗口回归：非日文、模型不可用时按钮始终可见但禁用，并在状态区解释原因；日文且模型可用时按钮可点击。`npm run test:ui` 通过，检查了正常和不可用状态的截图。已有运行中的 Electron 必须退出重启才能载入修改后的 HTML/JS；旧安装包仍未含此实验功能。
+
+---
+
+## 2026-09-27 日漫精读实验（v1.0.0-mangaOCR）
+
+该分支起点与 v1.0.0 相同，原先没有 Manga OCR 实现。日文气泡编辑器提供“日漫精读”，将主进程保留的原始选区截图按气泡范围加 16 px 裁成 PNG，调用 `/bubble/manga-ocr`；结果仅写入原文草稿，仍需用户核对并点“翻译并保存”。原“重新识别截图”继续使用 RapidOCR 和 8 px 裁图。模型由单次独立 Python 进程运行，故每次约 7–8 秒；主后端不会常驻 PyTorch。需 Python 3.10、`.manga-ocr-venv` 和模型缓存；已将本地实验环境放在此默认位置并验证无需环境变量也能检测。当前安装包未包含。详见 README 设置命令。按钮现在始终可见，不可用时禁用并提示原因。
+
+真实试验：`.qa/real-01.jpg`、`real-02.jpg` 按保存气泡的裁图规则走 HTTP 接口，报告 `.qa/manga-ocr-comparison.json`。首张 RapidOCR 读为“立川で見た穴の下の巨大な眼は…”（3.24 秒），Manga OCR 用 16 px 留白读为“立川で見た〝穴〟の下の巨大な眼は：”（7.88 秒），保留了引号；第二张两者均为“実戦剣術も一流です”，RapidOCR 0.36 秒、Manga OCR 7.79 秒。Manga OCR 用 8 px 留白时第一张反而读错助词，因此精读使用 16 px。实测可选虚拟环境约 1.6 GiB、模型缓存约 847 MiB；首次初始化约 16 秒，后续模型加载约 3 秒（单独进程调用有额外开销）。两个样例不足以代表整体准确率。
+
+`npm run validate`、34 项 Python 测试通过；UI 自动点击精读按钮、验证仅改草稿，并查看常规/小窗口截图。真实 HTTP 模型测试通过，不调用翻译服务；尚未做系统鼠标实点或重新打包安装版。改动与调用点审计无安全冗余清理建议。
+
+---
+
+## 2026-09-27 Windows 安装包
+
+新增 `npm run dist:win`：PyInstaller 独立后端 + electron-builder / NSIS，输出 `dist/Inazuma-Setup-1.0.0-x64.exe`，约 214 MiB。先安装 `backend/requirements-build.txt`。各语言模型构建时收集，韩语指定 PP-OCRv5 mobile；其余语言保持原模型。`.build/`、`dist/` 忽略，资源白名单不包含开发者 `.env`。
+
+安装版自动启动内置后端并分配端口；“配置密钥”打开用户数据目录 `settings.env.txt`，保存后重启。未签名。免安装启动 `dist/win-unpacked/Inazuma.exe` 必须保留整个目录。
+
+验证：默认 validator、32 项 Python 测试通过。实际静默安装，PATH 仅保留 System32，日文图识别 66 字，英/中/韩调用成功，清除、退出确认、后端退出通过；随后静默卸载成功。证据 `.qa/installed-smoke-jm2HCp`。无翻译服务调用，未测干净 Windows VM；多语言共用日文图仅证明引擎能运行，不代表准确率。测试指定隔离端口，自动端口分配未单独集成验证。首次构建工具栏截图已查看；隐藏窗口不调用 Page.captureScreenshot，避免等待不可见表面。
+
+变更及调用点已审计，无额外安全冗余清理建议。未 commit / push。
+
+---
+## 2026-09-26 统一 validator
 
 新增 `npm run validate`：基础 Node、UI、Windows 原生输入、正常 GPU 响应测试串行执行；30s / 60s 超时，超时仅清理当前测试进程树，失败后继续，总失败退出码 1。`.qa/validation/latest.json` 和逐项日志每次覆盖，执行中标 RUNNING。`npm run validate:glass` 单独验证实验折射，报告在 glass 子目录，不能替代默认回归。禁止同时运行多个 validator 以免共享测试文件 / GPU 相互影响。
 

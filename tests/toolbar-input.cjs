@@ -5,9 +5,13 @@ const {promisify}=require('node:util');
 const path=require('node:path');
 const assert=require('node:assert/strict');
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
-app.setPath('userData',path.resolve(__dirname,'../.qa/toolbar-input'));
+const fs=require('node:fs');
+fs.mkdirSync(path.resolve(__dirname,'../.qa'),{recursive:true});
+app.setPath('userData',fs.mkdtempSync(path.resolve(__dirname,'../.qa/toolbar-input-')));
 delete process.env.MWT_GLASS_CAPTURE;
-global.fetch=async()=>Response.json({service:'manga-window-translator',protocol:3,ocr:'ready',providers:{deepseek:true}});
+process.env.MWT_ENV_FILE=path.join(app.getPath('userData'),'no-env');
+process.env.DEEPSEEK_API_KEY='test-toolbar-key';
+global.fetch=async()=>Response.json({service:'manga-window-translator',protocol:4,ocr:'ready',providers:{deepseek:true}});
 require('node:child_process').spawn=()=>{throw Error('Unexpected backend spawn');};
 let captureRequests=0;
 desktopCapturer.getSources=async()=>{captureRequests++;throw Error('Controlled capture failure');};
@@ -18,6 +22,7 @@ app.whenReady().then(()=>{screen.getCursorScreenPoint=()=>pointer;});
 BrowserWindow.prototype.setIgnoreMouseEvents=function(value){ignoreRequests.set(this.id,value);return originalIgnore.call(this,true,{forward:true});};
 BrowserWindow.prototype.focus=function(){};
 app.on('browser-window-created',(_,win)=>{win.setFocusable(false);win.setIgnoreMouseEvents(true);});
+require('./mock-backend.cjs')();
 require('../main');
 app.whenReady().then(async()=>{
   try {

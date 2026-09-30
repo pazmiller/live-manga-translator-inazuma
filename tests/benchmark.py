@@ -6,19 +6,41 @@ from pathlib import Path
 import subprocess
 import sys
 import time
-import urllib.request
+import http.client
+import secrets
+import hmac
+import hashlib
+from contextlib import contextmanager
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / ".qa"
-URL = "http://127.0.0.1:18765"
+SESSION = secrets.token_bytes(32)
+
+
+@contextmanager
+def request_api(route, payload=None, timeout=75):
+    connection = http.client.HTTPConnection('127.0.0.1', 18765, timeout=timeout)
+    try:
+        nonce = secrets.token_hex(32)
+        connection.request('GET', '/auth?nonce='+nonce)
+        response = connection.getresponse()
+        proof = json.loads(response.read(4097)).get('proof', '')
+        expected = hmac.new(SESSION, f'server\n{nonce}'.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(proof, expected) or connection.sock is None:
+            raise RuntimeError('Backend authentication failed')
+        token = hmac.new(SESSION, b'client', hashlib.sha256).hexdigest()
+        connection.request('POST' if payload else 'GET', route, payload,
+                           {'Content-Type':'application/json', 'Authorization':f'Bearer {token}'})
+        yield connection.getresponse()
+    finally:
+        connection.close()
 
 
 def run_case(name, image):
     payload = json.dumps(dict(image=base64.b64encode(image.read_bytes()).decode(), source="ja", target="zh-CN", provider="deepseek")).encode()
-    request = urllib.request.Request(URL+"/translate/stream", data=payload, headers={"Content-Type": "application/json"})
     start = time.perf_counter()
     events, arrivals = [], []
-    with urllib.request.urlopen(request, timeout=75) as response:
+    with request_api('/translate/stream', payload) as response:
         for line in response:
             event = json.loads(line)
             events.append(event)
@@ -39,14 +61,16 @@ if __name__ == "__main__":
     OUT.mkdir(exist_ok=True)
     with (OUT / "backend-benchmark.log").open("w", encoding="utf-8") as log:
         proc = subprocess.Popen([sys.executable, str(ROOT/"backend/server.py"), "18765"], cwd=ROOT,
-                                stdout=log, stderr=log, env={**os.environ,"PYTHONIOENCODING":"utf-8"}, creationflags=subprocess.CREATE_NO_WINDOW)
+                                stdin=subprocess.PIPE, stdout=log, stderr=log, env={**os.environ,"PYTHONIOENCODING":"utf-8"}, creationflags=subprocess.CREATE_NO_WINDOW)
+        proc.stdin.write(SESSION.hex().encode()+b'\n')
+        proc.stdin.close()
         try:
             ready = False
             for _ in range(120):
                 if proc.poll() is not None:
                     raise RuntimeError("Backend exited; inspect .qa/backend-benchmark.log")
                 try:
-                    with urllib.request.urlopen(URL+"/health", timeout=1) as response:
+                    with request_api('/health', timeout=1) as response:
                         info = json.load(response)
                     if info["ocr"] == "ready":
                         ready = True

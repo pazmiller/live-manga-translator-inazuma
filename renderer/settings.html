@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>翻译AI设置 · Inazuma</title>
+  <link rel="stylesheet" href="settings.css">
+</head>
+
+<body>
+  <header class="titlebar"><span class="wordmark">INAZUMA <span>/ AI</span></span><button id="uiLanguage" data-language-toggle type="button" aria-label="Switch to English">EN</button><button id="close" class="close"
+      aria-label="关闭设置" title="关闭">×</button></header>
+  <main>
+    <div class="intro">
+      <h2>请选择你的AI LLM服务商，对应模型和API Key</h2>
+    </div>
+    <form id="settings-form">
+      <fieldset class="providers" id="providers" aria-label="AI 服务商" disabled>
+        <legend>AI 服务商</legend>
+        <label class="provider-card"><input type="radio" name="provider" value="openai"><span
+            class="provider-icon openai" aria-hidden="true">O</span><span>OpenAI</span><span class="provider-state"
+            data-state="openai">未连接</span></label>
+        <label class="provider-card"><input type="radio" name="provider" value="gemini"><span
+            class="provider-icon gemini" aria-hidden="true">✦</span><span>Gemini</span><span class="provider-state"
+            data-state="gemini">未连接</span></label>
+        <label class="provider-card"><input type="radio" name="provider" value="deepseek"><span
+            class="provider-icon deepseek" aria-hidden="true">D</span><span>DeepSeek</span><span class="provider-state"
+            data-state="deepseek">未连接</span></label>
+      </fieldset>
+      <fieldset class="configuration" id="fields" disabled>
+        <legend class="sr-only">模型与密钥</legend>
+        <div class="label-row"><label for="model">翻译模型</label><button type="button" id="sync" class="text-button"
+            title="向所选服务商读取账户可用模型，不发送翻译内容">↻ 同步可用模型</button></div>
+        <select id="model" required aria-describedby="model-note">
+          <option value="">正在载入…</option>
+        </select>
+        <div id="custom-field" hidden><label for="custom-model" class="sr-only">自定义模型名称</label><input id="custom-model"
+            maxlength="128" placeholder="输入完整模型 ID，例如 gpt-6-luna" spellcheck="false" autocomplete="off"></div>
+        <p id="model-note" class="field-note">正在读取模型列表…</p>
+        <div class="label-row key-label"><label for="api-key">API Key</label><span id="key-state"
+            class="small-tag">保存在本机</span></div>
+        <div class="key-input"><input id="api-key" type="password" maxlength="4096" placeholder="粘贴服务商的 API Key"
+            autocomplete="off" spellcheck="false" aria-describedby="key-note"><button type="button" id="toggle-key"
+            class="text-button" aria-label="显示密钥" aria-pressed="false">显示</button></div>
+        <p id="key-note" class="field-note">密钥使用系统加密保存，仅用于连接所选服务商。</p>
+        <div class="endpoint"><span class="endpoint-check" aria-hidden="true">✓</span>
+          <div><span class="endpoint-title">API 地址已自动匹配</span><span id="endpoint" class="endpoint-url"></span></div>
+        </div>
+      </fieldset>
+      <p id="feedback" role="status" aria-live="polite">正在读取设置…</p>
+      <footer><span class="save-hint">保存后立即生效</span><button type="button" id="cancel"
+          class="secondary">取消</button><button id="save" type="submit" class="primary" disabled>保存并使用</button></footer>
+    </form>
+  </main>
+  <script src="i18n.js"></script>
+  <script src="settings.js"></script>
+</body>
+
+</html>

@@ -3,7 +3,7 @@ html,body { margin:0; width:100%; height:100%; overflow:hidden; background:trans
 [hidden] { display:none !important; }
 button,textarea { font:inherit; }
 button { cursor:pointer; }
-button:disabled { cursor:wait; opacity:.48; }
+button:disabled { cursor:not-allowed; opacity:.48; }
 button:focus-visible,textarea:focus-visible,[tabindex]:focus-visible { outline:3px solid var(--glass-accent,#087cff); outline-offset:3px; }
 .bubble { position:absolute; box-sizing:border-box; cursor:grab; }
 .bubble .content { position:absolute; inset:2px; display:flex; align-items:center; justify-content:center; text-align:center; }
@@ -59,9 +59,10 @@ body.revealed .bubble,body.revealed .anchor,body.revealed #leaders,body.revealed
 #editor-source { min-height:120px; max-height:260px; resize:vertical; margin:0 0 16px; }
 #editor-source:disabled { opacity:.72; }
 #editor-translation { min-height:70px; max-height:170px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; background:var(--glass-reading); }
+#editor-translation.stale { border-color:#c78c36; }
 #editor-error { margin:16px 0 0; padding:10px 13px; border-radius:12px; background:#ffedea; color:#a52620; font-size:12px; line-height:1.6; user-select:text; overflow-wrap:anywhere; }
 #editor-status { min-height:18px; margin:13px 0; color:var(--glass-muted,#5d6c7d); font-size:11px; line-height:1.6; }
-.editor-actions,.editor-actions>div { display:flex; gap:8px; align-items:center; }
+.editor-actions,.editor-actions>div { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
 .editor-actions { justify-content:space-between; border-top:1px solid var(--glass-hairline); padding-top:16px; }
 #bubble-editor .primary { color:#fff; border-color:rgba(255,255,255,.42); background:linear-gradient(150deg,#49acffd7,#0873efe8); box-shadow:0 3px 12px #087cff24,inset 0 1px 0 #ffffff90; text-shadow:none; }
 #bubble-editor .primary:hover:not(:disabled) { background:#0068df; }
@@ -78,3 +79,4 @@ body.revealed .bubble,body.revealed .anchor,body.revealed #leaders,body.revealed
 @media (prefers-reduced-motion:reduce) { #progress i { animation:none; } #bubble-editor button { transition:none; } }
 @media (prefers-reduced-transparency:reduce) { .inplace .controls,#progress,#bubble-editor { backdrop-filter:none; background:var(--glass-panel-bg); } .bubble.reading { background:var(--glass-reading); } }
 
+html[lang="en"] .editor-actions { flex-wrap: wrap; gap: 10px; }

@@ -7,6 +7,7 @@ let cancelText = '已取消';
 let readingMode = 'fixed';
 let readingRequest = 0;
 let recovery = { available: false, canRestore: false, completed: 0, total: 0 };
+let enhanceAvailable = false;
 
 function status(text) {
   $('status').textContent = text;
@@ -44,6 +45,10 @@ for (const [id, delta] of [['smaller', -.1], ['larger', .1]]) {
   };
 }
 $('reveal').onclick = () => window.api.reveal();
+$('configuration').onclick = async () => {
+  try { await window.api.configuration(); }
+  catch(error) { showError(error.message); }
+};
 window.api.onReveal(value => {
   $('reveal').setAttribute('aria-pressed', String(value));
   $('reveal').textContent = value ? '返回译文' : '查看原图';
@@ -73,13 +78,15 @@ $('dismissMessage').onclick = hideError;
 document.addEventListener('keydown', event => { if (event.key === 'Escape') hideError(); });
 
 function updateRecovery() {
+  $('enhanceOcr').hidden = !enhanceAvailable;
+  $('enhanceOcr').disabled = busy;
   $('recovery').hidden = !recovery.available && !recovery.canRestore;
   $('recoveryCount').textContent = `本页完成 ${recovery.completed || 0} / ${recovery.total || 0}`;
   $('retryRemaining').disabled = busy || !recovery.available;
   $('restorePrevious').disabled = busy || !recovery.canRestore;
   reportLayout();
 }
-window.api.onRecovery?.(data => { recovery = data; updateRecovery(); });
+window.api.onRecovery?.(data => { recovery = data; enhanceAvailable = Boolean(data.canEnhance); updateRecovery(); });
 
 function setBusy(value) {
   busy = value;
@@ -119,6 +126,17 @@ async function translate(retry = false) {
 const doLock = () => translate();
 $('lock').onclick = doLock;
 window.api.onHotkeyLock(doLock);
+$('enhanceOcr').onclick = async () => {
+  if (busy || !enhanceAvailable) return;
+  setBusy(true); cancelText = '已取消加强 OCR'; hideError(); status('正在加强 OCR…');
+  try {
+    const result = await window.api.enhanceCurrent();
+    if (result.cancelled) status(cancelText);
+    else if (result.error) { status('加强 OCR 未完成'); showError(result.error); }
+    else status(result.changed ? `加强 OCR 完成 · 更新 ${result.changed} 处` : '加强 OCR 完成 · 原文没有变化');
+  } catch (error) { status('加强 OCR 未完成'); showError(error.message); }
+  finally { setBusy(false); }
+};
 $('translateCurrent').onclick = doLock;
 $('retryRemaining').onclick = () => translate(true);
 $('restorePrevious').onclick = async () => {
@@ -134,7 +152,7 @@ $('clear').onclick = async () => {
   try { await window.api.clear(); } catch (error) { showError(error.message); }
 };
 window.api.onStatus(data => {
-  if (data.cleared) { cancelText = '已清除'; hideError(); }
+  if (data.cleared) { cancelText = '已清除'; enhanceAvailable = false; updateRecovery(); hideError(); }
   status(data.text);
 });
 
@@ -175,17 +193,35 @@ $('moveSelection').onclick = async () => {
   catch (error) { showError(error.message); }
 };
 
+let settingsLoaded = false;
+function applyConfiguration(settings) {
+  $('provider').value = settings.selectedProvider;
+  for (const option of $('provider').options) {
+    const config = settings.providers[option.value];
+    option.disabled = !config?.hasKey;
+    option.title = config?.hasKey ? config.model : '请在 翻译AI配置中填写密钥';
+  }
+  save();
+}
+window.api.onConfigurationChanged?.(settings => {
+  settingsLoaded = true; applyConfiguration(settings); hideError();
+  status(`已切换 ${settings.providers[settings.selectedProvider].name} · ${settings.providers[settings.selectedProvider].model}`);
+});
 function updateHealth(data) {
-  if (!busy && !hasTranslated) status(data.ocr === 'ready' ? '框选漫画后开始翻译' : '模型预热中，可开始框选');
+  if(data.settings && !settingsLoaded) {settingsLoaded = true;applyConfiguration(data.settings);}
+  if (!busy && !hasTranslated) status(data.ocr === 'loading' ? '普通 OCR 预热中，可开始框选'
+    : data.manga_ocr_state === 'loading' ? '日漫精读后台载入中，可开始翻译'
+    : Object.values(data.providers).some(Boolean) ? '框选漫画后开始翻译' : '先打开 翻译AI配置，连接翻译服务');
   for (const option of $('provider').options) {
     option.disabled = !data.providers[option.value];
-    option.title = option.disabled ? '此引擎尚未配置' : '';
+    option.title = option.disabled ? '请在 翻译AI配置中填写密钥' : data.settings?.providers[option.value]?.model || '';
   }
   if ($('provider').selectedOptions[0]?.disabled) {
     const available = [...$('provider').options].find(option => !option.disabled);
     if (available) { $('provider').value = available.value; save(); }
   }
-  if (data.ocr === 'loading') setTimeout(() => window.api.health().then(updateHealth).catch(() => {}), 1000);
+  if (data.ocr === 'loading' || data.manga_ocr_state === 'loading')
+    setTimeout(() => window.api.health().then(updateHealth).catch(() => {}), 1000);
   if (data.ocr === 'error' && !busy && !hasTranslated) status('预热失败，翻译时将重试');
 }
 window.api.health().then(updateHealth).catch(error => { status('服务不可用'); showError(error.message); });

@@ -103,13 +103,16 @@ async function testEditor(win,base,begin,dismissedKeys) {
   let current={...base,job:21,key:'editor-21',text:'今日はいい天気ですね。',translated:'今天天气真好。'};
   const image=nativeImage.createFromPath(path.join(root,'.qa/fixture.png')).crop({x:Math.round(base.x),y:Math.round(base.y),width:Math.round(base.w),height:Math.round(base.h)}).toDataURL();
   let translateMode='error',resolveTranslate,resolveInspect,inspectDeferred=false,translateCalls=0,lastPayload;
+  let inspectionSource='ja',mangaAvailable=true,healthDeferred=false;
   let modalOpen=false,hitRegions=[];
   const modalListener=(event,value)=>{if(event.sender===win.webContents) modalOpen=value;};
   const hitsListener=(event,value)=>{if(event.sender===win.webContents) hitRegions=value;};
   ipcMain.on('overlay:editor',modalListener);ipcMain.on('win:hitRegions',hitsListener);
-  const inspection=()=>({text:current.text,translated:current.translated,image,source:'ja',target:'zh-CN',provider:'DeepSeek'});
+  ipcMain.handle('frame:health',()=>healthDeferred ? new Promise(()=>{}) : {manga_ocr:mangaAvailable});
+  const inspection=()=>({text:current.text,translated:current.translated,image,source:inspectionSource,target:'zh-CN',provider:'DeepSeek'});
   ipcMain.handle('bubble:inspect',()=>inspectDeferred ? new Promise(resolve=>{resolveInspect=resolve;}) : inspection());
   ipcMain.handle('bubble:ocr',()=>({text:'今日は本当にいい天気ですね。'}));
+  ipcMain.handle('bubble:manga-ocr',()=>mangaAvailable ? {text:'今日はきっといい天気ですね。'} : {error:'尚未安装日漫精读模型'});
   ipcMain.handle('bubble:translate',(_event,data)=>{
     translateCalls++;lastPayload=data;
     if(translateMode==='deferred') return new Promise(resolve=>{resolveTranslate=resolve;});
@@ -129,10 +132,25 @@ async function testEditor(win,base,begin,dismissedKeys) {
   win.webContents.sendInputEvent({type:'mouseUp',button:'left',clickCount:1,x:point.x+65,y:point.y+45});await delay(50);
   await evaluate(`document.querySelector('.original').click()`);
   const position=await evaluate(`({x:document.querySelector('.bubble').offsetLeft,y:document.querySelector('.bubble').offsetTop})`);
-  await open();
+  healthDeferred=true;await open();
+  assert.equal(await evaluate(`document.getElementById('editor-source').disabled`),false,'Slow health check must not block editing');
+  assert.equal(await evaluate(`document.getElementById('editor-manga-ocr').disabled`),false,'Slow health check must not block Manga OCR action');
+  await evaluate(`document.getElementById('editor-manga-ocr').click()`);
+  await until(()=>evaluate(`document.getElementById('editor-source').value==='今日はきっといい天気ですね。'`));
+  await evaluate(`document.getElementById('editor-cancel').click()`);
+  healthDeferred=false;await open();
   assert.equal(await evaluate(`document.activeElement.id`),'editor-source','Original text gets keyboard focus');
   assert.equal(await evaluate(`document.getElementById('editor-image').hidden`),false);
   await until(()=>modalOpen && hitRegions.some(r=>r.width===1000 && r.height===740));
+  assert.equal(await evaluate(`document.getElementById('editor-manga-ocr').hidden`),false);
+  await until(()=>evaluate(`!document.getElementById('editor-manga-ocr').disabled`));
+  const mangaPoint=await evaluate(`(()=>{const r=document.getElementById('editor-manga-ocr').getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)}})()`);
+  win.webContents.sendInputEvent({type:'mouseMove',...mangaPoint});
+  win.webContents.sendInputEvent({type:'mouseDown',button:'left',clickCount:1,...mangaPoint});
+  win.webContents.sendInputEvent({type:'mouseUp',button:'left',clickCount:1,...mangaPoint});
+  await until(()=>evaluate(`document.getElementById('editor-source').value==='今日はきっといい天気ですね。'`));
+  assert.match(await evaluate(`document.getElementById('editor-translation-label').textContent`),/上次译文.*尚未重新翻译/);
+  assert.equal(await evaluate(`document.querySelector('.copy').textContent`),current.text,'Manga OCR only changes the editable draft');
   await evaluate(`document.getElementById('editor-source').value=' ';document.getElementById('editor-save').click()`);
   assert.equal(translateCalls,0,'Empty text does not call provider');
   assert.equal(await evaluate(`document.getElementById('editor-error').hidden`),false);
@@ -151,6 +169,25 @@ async function testEditor(win,base,begin,dismissedKeys) {
   assert.deepEqual(await evaluate(`({x:document.querySelector('.bubble').offsetLeft,y:document.querySelector('.bubble').offsetTop})`),position,'Save preserves dragged position');
   await evaluate(`document.querySelector('.original').click()`);
   assert.equal(await evaluate(`document.querySelector('.copy').textContent`),current.translated);
+
+  inspectionSource='en';await open();
+  assert.equal(await evaluate(`document.getElementById('editor-manga-ocr').hidden`),false,'Explain Japanese-only mode instead of hiding the feature');
+  assert.equal(await evaluate(`document.getElementById('editor-manga-ocr').disabled`),false);
+  await until(()=>evaluate(`document.getElementById('editor-status').textContent.includes('仅支持日文气泡')`));
+  assert.match(await evaluate(`document.getElementById('editor-status').textContent`),/仅支持日文气泡/);
+  await evaluate(`document.getElementById('editor-manga-ocr').click()`);
+  assert.match(await evaluate(`document.getElementById('editor-error').textContent`),/仅支持日文气泡/);
+  await snapshot(win,'overlay-editor-non-ja.png');
+  await evaluate(`document.getElementById('editor-cancel').click()`);
+  inspectionSource='ja';mangaAvailable=false;await open();
+  assert.equal(await evaluate(`document.getElementById('editor-manga-ocr').hidden`),false,'Explain missing optional model instead of hiding the feature');
+  assert.equal(await evaluate(`document.getElementById('editor-manga-ocr').disabled`),false,'Missing model should return a reason instead of leaving an inert button');
+  await until(()=>evaluate(`document.getElementById('editor-status').textContent.includes('模型未安装')`));
+  await evaluate(`document.getElementById('editor-manga-ocr').click()`);
+  await until(()=>evaluate(`document.getElementById('editor-error').textContent.includes('尚未安装')`));
+  await snapshot(win,'overlay-editor-no-model.png');
+  await evaluate(`document.getElementById('editor-cancel').click()`);
+  mangaAvailable=true;
 
   const dismissCount=dismissedKeys.length;
   await send('begin',{...begin,job:22});
@@ -202,12 +239,12 @@ async function testEditor(win,base,begin,dismissedKeys) {
   assert.equal(await evaluate(`document.querySelectorAll('.bubble').length`),0,'Bubble Escape dismisses result');
   await send('clear');
   ipcMain.removeListener('overlay:editor',modalListener);ipcMain.removeListener('win:hitRegions',hitsListener);
-  for(const name of ['bubble:inspect','bubble:ocr','bubble:translate']) ipcMain.removeHandler(name);
+  for(const name of ['frame:health','bubble:inspect','bubble:ocr','bubble:manga-ocr','bubble:translate']) ipcMain.removeHandler(name);
 }
 
 async function testFrame() {
   let finish,frame,lockCalls=0,retryCalls=0,restoreCalls=0,recenterCalls=0,readingFallback=false;
-  ipcMain.handle('frame:health',()=>({ocr:'ready',providers:{deepseek:true,google:true,claude:false}}));
+  ipcMain.handle('frame:health',()=>({ocr:'ready',providers:{deepseek:true,openai:false,gemini:false}}));
   ipcMain.handle('frame:lock',()=>{lockCalls++;return new Promise(resolve=>{finish=resolve;});});
   ipcMain.handle('frame:cancel',()=>finish({cancelled:true}));
   ipcMain.handle('frame:clear',()=>finish?.({cancelled:true}));
@@ -218,12 +255,15 @@ async function testFrame() {
   ipcMain.handle('frame:recenter',()=>{recenterCalls++;return {};});
   const heightListener=(event,height)=>{if(frame && event.sender===frame.webContents) frame.setSize(680,Math.max(160,Math.min(640,height)));};
   ipcMain.on('frame:height',heightListener);
-  frame=new BrowserWindow({width:680,height:400,show:false,frame:false,webPreferences:{backgroundThrottling:false,preload:path.join(root,'preload.js')}});
+  // Match the app's initial DIP position; automatic centering can land between
+  // physical pixels at 125% and makes this layout-only fixture nondeterministic.
+  frame=new BrowserWindow({x:24,y:24,width:680,height:400,show:false,frame:false,transparent:true,resizable:false,webPreferences:{backgroundThrottling:false,preload:path.join(root,'preload.js')}});
   await frame.loadFile(path.join(root,'renderer/frame.html'));
   const evaluate=c=>frame.webContents.executeJavaScript(c,true);
   await until(()=>evaluate(`document.getElementById('status').textContent==='框选漫画后开始翻译'`));
   assert.equal(await evaluate(`document.querySelectorAll('.resize-handle').length`),0,'Toolbar does not contain selection resize handles');
-  assert.equal(frame.getBounds().width,680);
+  const initialToolbarWidth=frame.getBounds().width;
+  assert(Math.abs(initialToolbarWidth-680)<=1,`Toolbar width ${initialToolbarWidth} stays within one DIP of 680 after Windows pixel rounding`);
   await snapshot(frame,'frame.png');
   await evaluate(`document.getElementById('lock').click()`);
   assert.equal(await evaluate(`document.querySelector('#lock span').textContent`),'取消翻译');
@@ -264,7 +304,7 @@ async function testFrame() {
   await evaluate(`document.getElementById('glassTone').value='tinted';document.getElementById('glassTone').dispatchEvent(new Event('change'))`);
   assert.equal(await evaluate(`document.documentElement.dataset.glassTone`),'tinted');
   await evaluate(`document.getElementById('dismissMessage').click();document.getElementById('moveSelection').click()`);await until(()=>recenterCalls===1);
-  assert.equal(frame.getBounds().width,680,'Moving selection preserves toolbar width');
+  assert.equal(frame.getBounds().width,initialToolbarWidth,'Moving selection preserves toolbar width');
   await snapshot(frame,'frame-tinted.png');
   ipcMain.removeListener('frame:height',heightListener);
   frame.close();

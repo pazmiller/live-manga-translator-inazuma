@@ -252,7 +252,7 @@ ipcMain.on('frame:height', (event, height) => {
   const state = windows.get(event.sender.id);
   if (state) state.win.setSize(680, Math.ceil(height));
 });
-ipcMain.handle('frame:health', () => ({ocr:'ready', providers:{deepseek:true, google:true, claude:false}}));
+ipcMain.handle('frame:health', () => ({ocr:'ready', providers:{deepseek:true, openai:false, gemini:false}}));
 ipcMain.handle('frame:readingMode', (_event, mode) => ({mode}));
 ipcMain.handle('frame:getBounds', event => windows.get(event.sender.id).win.getBounds());
 

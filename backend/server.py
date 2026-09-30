@@ -18,12 +18,14 @@ from typing import Annotated, Literal
 import numpy as np
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
 from PIL import Image, UnidentifiedImageError
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, SecretStr, field_validator
 
-_env = Path(__file__).resolve().parent.parent / ".env"
+_env = Path(os.environ["MWT_ENV_FILE"]) if os.environ.get("MWT_ENV_FILE") else Path(__file__).resolve().parent.parent / ".env"
 if _env.exists():
-    for line in _env.read_text(encoding="utf-8").splitlines():
+    for line in _env.read_text(encoding="utf-8-sig").splitlines():
         line = line.strip()
         if line and not line.startswith("#") and "=" in line:
             k, v = line.split("=", 1)
@@ -31,11 +33,27 @@ if _env.exists():
 
 import ocr
 import translate
+from manga_worker import MangaWorker, MangaWorkerError
+from local_auth import LocalAuth, read_session_key
 
 _warm = {"state": "loading"}
 _slots = threading.BoundedSemaphore(2)
 _ocr_cache = OrderedDict()
 _ocr_cache_lock = threading.Lock()
+
+
+def manga_ocr_python():
+    if getattr(sys, "frozen", False):
+        bundled = Path(sys.executable).parent.parent / "manga-ocr" / "inazuma-manga-ocr.exe"
+        return bundled if bundled.is_file() else None
+    if not Path(__file__).with_name("manga_ocr_worker.py").is_file():
+        return None
+    configured = os.getenv("MWT_MANGA_OCR_PYTHON")
+    candidate = Path(configured) if configured else Path(__file__).resolve().parent.parent / ".manga-ocr-venv" / "Scripts" / "python.exe"
+    return candidate if candidate.is_file() else None
+
+
+_manga = MangaWorker(manga_ocr_python, None if getattr(sys, "frozen", False) else Path(__file__).with_name("manga_ocr_worker.py"))
 
 
 def prewarm():
@@ -49,10 +67,33 @@ def prewarm():
 @asynccontextmanager
 async def lifespan(app):
     threading.Thread(target=prewarm, daemon=True).start()
-    yield
+    threading.Thread(target=_manga.start, daemon=True).start()
+    try:
+        yield
+    finally:
+        _manga.close()
 
 
 app = FastAPI(lifespan=lifespan)
+app.state.session_key = None
+app.add_middleware(LocalAuth, key=lambda: app.state.session_key)
+
+
+@app.exception_handler(RequestValidationError)
+async def invalid_request(_request, _error):
+    # Validation errors can otherwise echo the entire request, including keys.
+    return JSONResponse(status_code=422, content={"detail": "请求参数无效，请检查语言、模型和输入内容"})
+
+
+class ProviderReq(BaseModel):
+    provider: Literal["openai", "gemini", "deepseek"] = "deepseek"
+    model: str | None = Field(default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
+    api_key: SecretStr | None = Field(default=None, max_length=4096)
+
+    def translation_options(self):
+        if self.model is None and self.api_key is None:
+            return {}
+        return {"config": {"model": self.model, "api_key": self.api_key.get_secret_value() if self.api_key else None}}
 
 
 class ImageReq(BaseModel):
@@ -60,9 +101,8 @@ class ImageReq(BaseModel):
     source: Literal["ja", "en", "zh", "ko"] = "ja"
 
 
-class TranslateReq(ImageReq):
+class TranslateReq(ImageReq, ProviderReq):
     target: Literal["zh-CN", "zh-TW", "en", "ja"] = "zh-CN"
-    provider: Literal["google", "deepseek", "claude"] = "deepseek"
     only_ids: list[Annotated[int, Field(strict=True, ge=0)]] | None = Field(default=None, max_length=100)
 
     @field_validator("only_ids")
@@ -73,11 +113,10 @@ class TranslateReq(ImageReq):
         return ids
 
 
-class BubbleTranslateReq(BaseModel):
+class BubbleTranslateReq(ProviderReq):
     text: str = Field(min_length=1, max_length=4000)
     source: Literal["ja", "en", "zh", "ko"] = "ja"
     target: Literal["zh-CN", "zh-TW", "en", "ja"] = "zh-CN"
-    provider: Literal["google", "deepseek", "claude"] = "deepseek"
 
     @field_validator("text")
     @classmethod
@@ -87,19 +126,31 @@ class BubbleTranslateReq(BaseModel):
         return text.strip()
 
 
+class TextsTranslateReq(ProviderReq):
+    texts: list[Annotated[str, Field(min_length=1, max_length=4000)]] = Field(min_length=1, max_length=100)
+    source: Literal["ja", "en", "zh", "ko"] = "ja"
+    target: Literal["zh-CN", "zh-TW", "en", "ja"] = "zh-CN"
+
+    @field_validator("texts")
+    @classmethod
+    def nonempty_texts(cls, texts):
+        if any(not text.strip() for text in texts):
+            raise ValueError("气泡原文不能为空")
+        return [text.strip() for text in texts]
+
+
 @app.get("/health")
 def health():
-    return {"ok": True, "service": "manga-window-translator", "protocol": 3,
-            "ocr": _warm["state"],
-            "providers": {"google": True, "deepseek": bool(os.getenv("DEEPSEEK_API_KEY")),
-                          "claude": bool(os.getenv("ANTHROPIC_API_KEY"))}}
+    manga_state = _manga.status()
+    return {"ok": True, "service": "manga-window-translator", "protocol": 4,
+            "ocr": _warm["state"], "manga_ocr": manga_state == "ready",
+            "manga_ocr_state": manga_state,
+            "providers": {provider: bool(translate.provider_config(provider)['api_key']) for provider in translate.PROVIDERS}}
 
 
-def require_provider(provider):
-    if provider == "deepseek" and not os.getenv("DEEPSEEK_API_KEY"):
-        raise HTTPException(400, "请在 .env 配置 DEEPSEEK_API_KEY 后重启")
-    if provider == "claude" and not os.getenv("ANTHROPIC_API_KEY"):
-        raise HTTPException(400, "请在 .env 配置 ANTHROPIC_API_KEY 后重启")
+def require_provider(provider, config=None):
+    if provider in translate.PROVIDERS and not translate.provider_config(provider, config)['api_key']:
+        raise HTTPException(400, "请打开 翻译AI配置，为所选服务商填写 API Key")
 
 
 def decode_image(req):
@@ -149,7 +200,7 @@ def pipeline(req, pil, digest, cancelled):
     translated = cached = 0
     if bubbles:
         yield {"type": "progress", "stage": "translation", "text": f"识别到 {len(bubbles)} 处，正在翻译…"}
-        for b in translate.translated_bubbles(bubbles, pil, req.source, req.target, req.provider, cancelled):
+        for b in translate.translated_bubbles(bubbles, pil, req.source, req.target, req.provider, cancelled, **req.translation_options()):
             if cancelled.is_set():
                 return
             translated += 1
@@ -199,14 +250,56 @@ def bubble_ocr(req: ImageReq):
         _slots.release()
 
 
+@app.post("/bubble/manga-ocr")
+def bubble_manga_ocr(req: ImageReq):
+    if req.source != "ja":
+        raise HTTPException(400, "日漫精读仅支持日文原文")
+    if manga_ocr_python() is None:
+        raise HTTPException(503, "尚未安装日漫精读模型")
+    manga_state = _manga.status()
+    if manga_state != "ready":
+        message = "日漫精读模型正在后台载入，请稍候重试" if manga_state == "loading" else "日漫精读模型启动失败，请重启应用"
+        raise HTTPException(503, message)
+    if not _slots.acquire(blocking=False):
+        raise HTTPException(429, "识别服务忙，请稍后重试")
+    try:
+        image, _ = decode_image(req)
+        with image, io.BytesIO() as payload:
+            image.save(payload, format="PNG")
+            try:
+                return {"text": _manga.recognize(payload.getvalue())}
+            except MangaWorkerError as error:
+                raise HTTPException(error.status_code, str(error)) from None
+    finally:
+        _slots.release()
+
+
 @app.post("/bubble/translate")
 def bubble_translate(req: BubbleTranslateReq):
-    require_provider(req.provider)
+    require_provider(req.provider, **req.translation_options())
     if not _slots.acquire(blocking=False):
         raise HTTPException(429, "翻译服务忙，请稍后重试")
     try:
-        translated = translate.translate_text(req.text, req.source, req.target, req.provider)
+        translated = translate.translate_text(req.text, req.source, req.target, req.provider, **req.translation_options())
         return {"text": req.text, "translated": translated}
+    except Exception as error:
+        raise HTTPException(502, error_message(error)) from None
+    finally:
+        _slots.release()
+
+
+@app.post("/selection/translate-texts")
+def selection_translate_texts(req: TextsTranslateReq):
+    require_provider(req.provider, **req.translation_options())
+    if not _slots.acquire(blocking=False):
+        raise HTTPException(429, "翻译服务忙，请稍后重试")
+    try:
+        bubbles = [{"id": index, "text": text} for index, text in enumerate(req.texts)]
+        values = [item["translated"] for item in translate.translated_bubbles(
+            bubbles, None, req.source, req.target, req.provider, threading.Event(), **req.translation_options())]
+        if len(values) != len(req.texts):
+            raise translate.TranslationError("翻译条数与原文不一致，请重试")
+        return {"items": [{"text": text, "translated": value} for text, value in zip(req.texts, values)]}
     except Exception as error:
         raise HTTPException(502, error_message(error)) from None
     finally:
@@ -215,7 +308,7 @@ def bubble_translate(req: BubbleTranslateReq):
 
 @app.post("/translate/stream")
 async def stream_translate(req: TranslateReq):
-    require_provider(req.provider)
+    require_provider(req.provider, **req.translation_options())
     pil, digest = decode_image(req)
     if not _slots.acquire(blocking=False):
         pil.close()
@@ -263,7 +356,7 @@ async def stream_translate(req: TranslateReq):
 
 @app.post("/translate")
 def do_translate(req: TranslateReq):
-    require_provider(req.provider)
+    require_provider(req.provider, **req.translation_options())
     pil, digest = decode_image(req)
     if not _slots.acquire(blocking=False):
         pil.close()
@@ -285,5 +378,9 @@ def do_translate(req: TranslateReq):
 
 if __name__ == "__main__":
     import uvicorn
+    try:
+        app.state.session_key = read_session_key(sys.stdin.buffer)
+    except (ValueError, AttributeError):
+        raise SystemExit('Backend must be started by Inazuma') from None
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8765
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")

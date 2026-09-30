@@ -6,10 +6,9 @@ import sys
 import threading
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
-from fastapi.testclient import TestClient
+from backend_test_support import authenticated_client
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
@@ -27,11 +26,14 @@ def png_payload(size=(300, 100)):
 
 class BubbleActionTests(unittest.TestCase):
     def setUp(self):
-        self.client = TestClient(server.app)
+        credentials = patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-placeholder"})
+        credentials.start()
+        self.addCleanup(credentials.stop)
+        self.client = authenticated_client(server)
         server._ocr_cache.clear()
         translate._cache.clear()
         self.image = png_payload()
-        self.text_request = dict(text="corrected dialogue", source="en", target="zh-CN", provider="google")
+        self.text_request = dict(text="corrected dialogue", source="en", target="zh-CN", provider="deepseek")
 
     def tearDown(self):
         self.client.close()
@@ -61,27 +63,55 @@ class BubbleActionTests(unittest.TestCase):
             self.assertTrue(slot.acquire(blocking=False))
             slot.release()
 
-    def test_corrected_text_is_used_for_google_and_deepseek(self):
-        for provider, function in (("google", "translate_free"), ("deepseek", "translate_deepseek")):
-            with self.subTest(provider=provider), patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-placeholder"}), patch.object(translate, function, return_value=["  translation  "]) as call, patch.object(ocr, "ocr_lines") as engine:
-                response = self.client.post("/bubble/translate", json={**self.text_request, "provider": provider})
-            self.assertEqual(response.status_code, 200)
-            self.assertEqual(response.json(), {"text": "corrected dialogue", "translated": "translation"})
-            call.assert_called_once_with(["corrected dialogue"], "en", "zh-CN")
-            engine.assert_not_called()
-
-    def test_claude_receives_corrected_text_without_images(self):
-        client = Mock()
-        client.beta.messages.create.return_value = SimpleNamespace(
-            stop_reason="end_turn", content=[SimpleNamespace(type="text", text='["correct translation"]')])
-        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-placeholder"}), patch.object(translate, "_anthropic_client", return_value=client), patch.object(translate, "translate_claude_vision") as vision:
-            response = self.client.post("/bubble/translate", json={**self.text_request, "provider": "claude"})
+    def test_manga_ocr_uses_saved_image_without_translation_key(self):
+        with patch.object(server, "manga_ocr_python", return_value=Path("python.exe")), \
+             patch.object(server._manga, "status", return_value="ready"), \
+             patch.object(server._manga, "recognize", return_value="Japanese text") as worker, \
+             patch.object(translate, "translate_text") as provider:
+            response = self.client.post("/bubble/manga-ocr", json=dict(image=self.image, source="ja"))
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"text": "corrected dialogue", "translated": "correct translation"})
-        content = client.beta.messages.create.call_args.kwargs["messages"][0]["content"]
-        self.assertEqual([part["type"] for part in content], ["text"])
-        self.assertIn("corrected dialogue", content[0]["text"])
-        vision.assert_not_called()
+        self.assertEqual(response.json(), {"text": "Japanese text"})
+        self.assertTrue(worker.call_args.args[0].startswith(b"\x89PNG"))
+        provider.assert_not_called()
+
+    def test_manga_ocr_rejects_non_japanese_and_unavailable_model(self):
+        with patch.object(server, "manga_ocr_python", return_value=Path("python.exe")), patch.object(server._manga, "recognize") as worker:
+            response = self.client.post("/bubble/manga-ocr", json=dict(image=self.image, source="en"))
+            self.assertEqual(response.status_code, 400)
+            worker.assert_not_called()
+            with patch.object(server._manga, "status", return_value="loading"):
+                response = self.client.post("/bubble/manga-ocr", json=dict(image=self.image, source="ja"))
+                self.assertEqual(response.status_code, 503)
+                self.assertIn("正在后台载入", response.json()["detail"])
+                worker.assert_not_called()
+        with patch.object(server, "manga_ocr_python", return_value=None):
+            response = self.client.post("/bubble/manga-ocr", json=dict(image=self.image, source="ja"))
+            self.assertEqual(response.status_code, 503)
+
+    def test_corrected_text_is_used_without_repeating_ocr(self):
+        with patch.object(translate, "translate_deepseek", return_value=["  translation  "]) as call, patch.object(ocr, "ocr_lines") as engine:
+            response = self.client.post("/bubble/translate", json=self.text_request)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"text": "corrected dialogue", "translated": "translation"})
+        call.assert_called_once_with(["corrected dialogue"], "en", "zh-CN")
+        engine.assert_not_called()
+
+    def test_selection_text_batch_preserves_each_source_and_uses_one_batch(self):
+        texts = ["ち違くてその…", "い、いやこれは…"]
+        request = dict(texts=texts, source="ja", target="zh-CN", provider="deepseek")
+        with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-placeholder"}), \
+             patch.object(translate, "_deepseek_stream", return_value=iter(["不是那样，那个…", "不，这是…"])) as provider:
+            response = self.client.post("/selection/translate-texts", json=request)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["items"], [
+            {"text": texts[0], "translated": "不是那样，那个…"},
+            {"text": texts[1], "translated": "不，这是…"},
+        ])
+        provider.assert_called_once_with(texts, "ja", "zh-CN")
+        with patch.object(translate, "_deepseek_stream") as provider:
+            for invalid in ([], [""], [" "]):
+                self.assertEqual(self.client.post("/selection/translate-texts", json={**request, "texts": invalid}).status_code, 422)
+            provider.assert_not_called()
 
     def test_text_validation_prevents_provider_calls(self):
         invalid = ({"text": ""}, {"text": " \n "}, {"text": "x" * 4001}, {"source": "xx"},
@@ -95,21 +125,15 @@ class BubbleActionTests(unittest.TestCase):
 
     def test_invalid_translation_count_or_blank_is_not_success(self):
         for result in ([], [""], [" "], [None], ["one", "two"], "wrong type"):
-            with self.subTest(result=result), patch.object(translate, "translate_free", return_value=result):
+            with self.subTest(result=result), patch.object(translate, "translate_deepseek", return_value=result):
                 response = self.client.post("/bubble/translate", json=self.text_request)
             self.assertEqual(response.status_code, 502)
             self.assertNotIn("translated", response.json())
 
-    def test_malformed_claude_result_is_not_success(self):
-        for result in ('[]', '["one", "two"]', '[" "]', '["unfinished"'):
-            with self.subTest(result=result), patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-placeholder"}), patch.object(translate, "_claude_response", return_value=result):
-                response = self.client.post("/bubble/translate", json={**self.text_request, "provider": "claude"})
-            self.assertEqual(response.status_code, 502)
-
     def test_provider_exception_is_sanitized_and_releases_slot(self):
         for error in (TimeoutError("private URL and secret"), ValueError("private URL and secret")):
             slot = threading.BoundedSemaphore(1)
-            with self.subTest(error=type(error).__name__), patch.object(server, "_slots", slot), patch.object(translate, "translate_free", side_effect=error):
+            with self.subTest(error=type(error).__name__), patch.object(server, "_slots", slot), patch.object(translate, "translate_deepseek", side_effect=error):
                 response = self.client.post("/bubble/translate", json=self.text_request)
             self.assertEqual(response.status_code, 502)
             self.assertNotIn("private", response.text)
@@ -126,17 +150,20 @@ class BubbleActionTests(unittest.TestCase):
 
     def test_paid_text_translation_still_requires_key(self):
         with patch.dict(os.environ, {}, clear=True), patch.object(translate, "translate_text") as provider:
-            for name in ("claude", "deepseek"):
+            for name in ("openai", "gemini", "deepseek"):
                 self.assertEqual(self.client.post("/bubble/translate", json={**self.text_request, "provider": name}).status_code, 400)
             provider.assert_not_called()
 
 
 class SelectedRetryTests(unittest.TestCase):
     def setUp(self):
-        self.client = TestClient(server.app)
+        credentials = patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-placeholder"})
+        credentials.start()
+        self.addCleanup(credentials.stop)
+        self.client = authenticated_client(server)
         server._ocr_cache.clear()
         translate._cache.clear()
-        self.payload = dict(image=png_payload(), source="en", target="zh-CN", provider="google")
+        self.payload = dict(image=png_payload(), source="en", target="zh-CN", provider="deepseek")
         self.lines = [dict(box=[20 + i * 100, 20, 60 + i * 100, 40], text=text, score=1)
                       for i, text in enumerate(("first", "second", "third"))]
 
@@ -149,7 +176,7 @@ class SelectedRetryTests(unittest.TestCase):
         return [json.loads(line) for line in response.text.splitlines()]
 
     def seed(self):
-        with patch.object(ocr, "ocr_lines", return_value=self.lines), patch.object(translate, "translate_free", return_value=["a", "b", "c"]):
+        with patch.object(ocr, "ocr_lines", return_value=self.lines), patch.object(translate, "_deepseek_stream", return_value=iter(["a", "b", "c"])):
             self.events(self.payload)
 
     def test_retry_after_partial_failure_only_sends_missing_original_ids(self):
@@ -209,13 +236,13 @@ class SelectedRetryTests(unittest.TestCase):
 
     def test_cached_success_is_never_resent_to_provider(self):
         bubbles = [dict(id=0, text="first"), dict(id=1, text="second")]
-        with patch.object(translate, "translate_free", return_value=["a", "b"]):
-            list(translate.translated_bubbles(bubbles, None, "en", "zh-CN", "google", threading.Event()))
+        with patch.object(translate, "_deepseek_stream", return_value=iter(["a", "b"])):
+            list(translate.translated_bubbles(bubbles, None, "en", "zh-CN", "deepseek", threading.Event()))
         for key in list(translate._cache):
             if key[-1] == 1:
                 del translate._cache[key]
-        with patch.object(translate, "translate_free", return_value=["retried"]) as provider:
-            results = list(translate.translated_bubbles(bubbles, None, "en", "zh-CN", "google", threading.Event()))
+        with patch.object(translate, "_deepseek_stream", return_value=iter(["retried"])) as provider:
+            results = list(translate.translated_bubbles(bubbles, None, "en", "zh-CN", "deepseek", threading.Event()))
         provider.assert_called_once_with(["second"], "en", "zh-CN")
         self.assertEqual([(b["id"], b["cached"]) for b in results], [(0, True), (1, False)])
 
