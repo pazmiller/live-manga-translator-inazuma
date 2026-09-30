@@ -97,5 +97,7 @@ We also thank the models, inference frameworks, and open-source communities behi
 
 ## License
 
-Inazuma's original code is licensed under the [ISC License](LICENSE), consistent with its `package.json` declaration.
+Copyright 2026 pazmiller.
+
+Inazuma's original code is licensed under the [Apache License 2.0](LICENSE), consistent with the `Apache-2.0` declaration in `package.json`.
 Third-party dependencies, models, and other assets remain subject to their respective licenses; this project's license does not replace their terms.

@@ -95,5 +95,7 @@ Manga OCR 仅用于日文，需要完整版或额外的开发环境。它复用�
 
 ## 许可证
 
-Inazuma 的原创代码采用 [ISC License](LICENSE)，与 `package.json` 中的声明一致。
+Copyright 2026 pazmiller。
+
+Inazuma 的原创代码采用 [Apache License 2.0](LICENSE)，与 `package.json` 中的 `Apache-2.0` 声明一致。
 第三方依赖、模型及其他资源仍遵循各自的许可证；本项目的许可证不替代它们的授权条款。
