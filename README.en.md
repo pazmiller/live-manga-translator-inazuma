@@ -85,3 +85,17 @@ For details on local communication authentication and window isolation, see the 
 [Development setup, builds, and tests (Chinese)](docs/DEVELOPMENT.md)
 
 After changing code, run `npm run validate`. It checks the UI, backend, window security, native window movement, and responsiveness, but does not replace manual testing with real manga, paid translation services, or multiple monitors.
+
+## Acknowledgments
+
+Thanks to these open-source projects and their contributors for making Inazuma's local text recognition possible:
+
+- [RapidOCR](https://github.com/RapidAI/RapidOCR): Provides text detection and recognition for standard OCR.
+- [Manga OCR](https://github.com/kha-white/manga-ocr): Provides enhanced Japanese manga recognition for Enhance OCR and individual bubble refinement.
+
+We also thank the models, inference frameworks, and open-source communities behind these projects.
+
+## License
+
+Inazuma's original code is licensed under the [ISC License](LICENSE), consistent with its `package.json` declaration.
+Third-party dependencies, models, and other assets remain subject to their respective licenses; this project's license does not replace their terms.
