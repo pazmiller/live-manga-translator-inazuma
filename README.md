@@ -1,5 +1,7 @@
 ﻿# Inazuma
 
+**简体中文** | [English](README.en.md)
+
 Windows 屏幕漫画翻译工具：框选正在阅读的漫画，在本地识别文字，再通过你选择的 AI 服务翻译。译文可显示在原气泡位置，也可作为可拖动的旁注，无需导入整本漫画或切换阅读软件。
 
 - **选区翻译**：支持日文、英文、中文、韩文识别，逐条显示译文。
@@ -19,7 +21,7 @@ Windows 屏幕漫画翻译工具：框选正在阅读的漫画，在本地识别
 
 运行对应安装程序，安装后从桌面或开始菜单打开 **Inazuma** / **Inazuma MangaOCR**。安装包尚未代码签名，Windows 可能显示未知发布者。
 
-**1.2.1 更新：** 两个安装包包含本地后端认证、Electron 窗口保护、窗口移动与截图修复，并清理了闲置翻译依赖。MangaOCR 完整版已采用新版 PyTorch / Transformers CPU 运行时。验证范围与 SHA-256 见 [发布验证记录](docs/RELEASE-1.2.1.md)。旧 1.1.0 安装包不包含这些后续改动。
+**1.2.1 更新：** 两个安装包包含本地后端认证、Electron 窗口保护、窗口移动与截图修复，并清理了闲置翻译依赖。MangaOCR 完整版已采用新版 PyTorch / Transformers CPU 运行时。安装包与 SHA-256 校验文件见 [GitHub Releases](https://github.com/pazmiller/live-manga-translator-inazuma/releases)。旧 1.1.0 安装包不包含这些后续改动。
 
 从源码运行或自行打包，见 [开发文档](docs/DEVELOPMENT.md)。
 
@@ -80,6 +82,20 @@ Manga OCR 仅用于日文，需要完整版或额外的开发环境。它复用�
 
 ## 开发与反馈
 
-[开发环境、构建与测试](docs/DEVELOPMENT.md) · [交接记录](HANDOFF.md)
+[开发环境、构建与测试](docs/DEVELOPMENT.md)
 
 修改代码后运行 `npm run validate`。它验证界面、后端、窗口安全、原生移动和响应性能，但不代替真实漫画、付费翻译和多屏环境的人工验收。
+
+## 致谢
+
+感谢以下开源项目及其贡献者，让 Inazuma 的本地文字识别成为可能：
+
+- [RapidOCR](https://github.com/RapidAI/RapidOCR)：提供普通 OCR 的文字检测与识别能力。
+- [Manga OCR](https://github.com/kha-white/manga-ocr)：提供面向日文漫画的加强识别能力，用于[加强 OCR]。
+
+## 许可证
+
+Copyright 2026 pazmiller。
+
+Inazuma 的原创代码采用 [Apache License 2.0](LICENSE)，与 `package.json` 中的 `Apache-2.0` 声明一致。
+第三方依赖、模型及其他资源仍遵循各自的许可证；本项目的许可证不替代它们的授权条款。

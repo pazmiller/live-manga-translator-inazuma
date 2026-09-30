@@ -7,3 +7,7 @@ __pycache__/
 .qa/
 .build/
 dist/
+
+# Local release and dependency audit notes (not published with the source).
+/docs/RELEASE-*.md
+/docs/PYTHON-DEPENDENCIES.md

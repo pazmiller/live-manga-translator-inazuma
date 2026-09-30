@@ -2,7 +2,7 @@
 
 [返回 README](../README.md)
 
-此文档描述当前源码。两个 1.2.1 安装包已重建，包含认证、Electron 加固、窗口修复与依赖更新；验证范围见 [发布验证记录](RELEASE-1.2.1.md)。旧 1.1.0 安装包未被修改。
+此文档描述当前源码。两个 1.2.1 安装包包含认证、Electron 加固、窗口修复与依赖更新。发布文件和校验和见 [GitHub Releases](https://github.com/pazmiller/live-manga-translator-inazuma/releases)。
 
 ## 环境与启动
 
@@ -23,8 +23,7 @@ npm start
 
 ## 可选 Manga OCR
 
-新版依赖已晋升到正式 `requirements-manga-ocr.txt`，默认开发及打包均使用
-`.manga-ocr-venv`。升级记录和验证边界见 [Python 依赖记录](PYTHON-DEPENDENCIES.md)。
+依赖版本以 [`backend/requirements-manga-ocr.txt`](../backend/requirements-manga-ocr.txt) 为准，默认开发及打包均使用 `.manga-ocr-venv`。发行版使用 CPU 推理，不需要独立显卡。
 
 使用独立 Python 3.10 环境：
 
@@ -120,7 +119,7 @@ API Key 使用 Electron `safeStorage` / Windows DPAPI 加密，保存在应用�
 
 所有窗口明确启用沙箱、上下文隔离和 Web 安全，阻止导航、弹窗和不需要的设备权限。IPC 核对登记窗口、主 frame、精确 URL、角色与参数。CSP 禁止内联脚本和 renderer 直接联网，服务商访问经主进程完成；动态布局所需的内联样式仅在相应页面保留。
 
-这些保护不承诺防御已经控制同一 Windows 用户或管理员权限的恶意软件，也不等于所有依赖均无漏洞。发行前仍需检查依赖、许可证、密钥排除和实际安装包；详情及待办见 [HANDOFF](../HANDOFF.md)。
+这些保护不承诺防御已经控制同一 Windows 用户或管理员权限的恶意软件，也不等于所有依赖均无漏洞。发行前仍需检查依赖、许可证、密钥排除和实际安装包。
 
 ## 截图与实验玻璃效果
 
@@ -130,8 +129,12 @@ API Key 使用 Electron `safeStorage` / Windows DPAPI 加密，保存在应用�
 
 实验模式设置 `MWT_GLASS_CAPTURE=1`，需要 Windows 10 2004 或更新版本，可能严重卡顿。它持续排除应用窗口以免镜像反馈，因此外部截图/录屏可能看不到 UI。背景仅在本机内存处理，只把玻璃覆盖区域交给 renderer，不写磁盘、不发给 OCR/翻译；跨显示器或截图失败时回退。此模式不是 Apple 原生 Liquid Glass。
 
-## 历史记录
+## 后续工作与验收边界
 
-[动态玻璃验证](QA-2026-09-23-liquid.md) · [功能测试记录](QA-2026-09-22-glass.md) · [布局与性能测试](QA-2026-09-22.md) · [交接与后续事项](../HANDOFF.md)
+- 扩充真实竖排、注音、小字和低清漫画样本，评估普通 OCR 漏检气泡和 MangaOCR 的识别效果；少量截图测试不能代表整体准确率。
+- 测量低性能 CPU 上的冷启动、常驻内存和连续识别耗时，优化翻页检测的截图开销。流式翻译和启动预热已实现，不再列为待开发功能。
+- 补充干净 Windows 环境的安装、覆盖升级、卸载和混合 DPI 多屏验收；自动化接口及窗口测试不能代替人工鼠标、滚轮和系统截图体验。
+- 排查 UI 截图测试偶发的 `UnknownVizError`。v1.2.1 已执行实际 exe 冒烟测试，但未重跑完整 `npm run validate`，不能把旧报告当作当前完整回归结果。
+- 评估安装包代码签名与发行版 Electron fuses；继续核查依赖、模型来源及打包后的内容。
 
-历史报告仅代表当时的代码和环境；本轮结果以实际运行生成的验证报告为准。
+当前译文固定在屏幕坐标上，翻页检测会隐藏旧结果，不会自动跟踪滚动后的气泡位置。图像背景处理也不等同于内容修复（inpainting）；如需增加这两项能力，应独立设计和验证。
